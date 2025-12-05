@@ -144,6 +144,27 @@ set -a
 source .env
 set +a
 
+# Validate required environment variables
+validate_env() {
+    local missing=()
+    
+    [ -z "$DATABASE_URL" ] && missing+=("DATABASE_URL")
+    [ -z "$TELEGRAM_BOT_TOKEN" ] && missing+=("TELEGRAM_BOT_TOKEN")
+    [ -z "$JWT_SECRET" ] && missing+=("JWT_SECRET")
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${RED}❌ Missing required environment variables:${NC}"
+        for var in "${missing[@]}"; do
+            echo -e "${RED}   - $var${NC}"
+        done
+        echo -e "${YELLOW}👉 Check your .env file and compare with .env.example${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Environment variables validated${NC}"
+}
+
+validate_env
+
 # Overwrite/Set dynamic variables
 export TELEGRAM_WEBAPP_URL="$NGROK_URL"
 export VITE_API_BASE_URL="$NGROK_URL/api"
@@ -209,6 +230,53 @@ check_venv "services/analytics"
 CMD_IMG="cd ../services/image-processor && PORT=3002 .venv/bin/python3 main.py"
 CMD_AI="cd ../services/ai-advisor && PORT=3003 .venv/bin/python3 main.py"
 CMD_ANALYTICS="cd ../services/analytics && PORT=3004 .venv/bin/python3 main.py"
+
+# ==========================================
+# 5. Background Healthcheck
+# ==========================================
+healthcheck_services() {
+    echo -e "\n${YELLOW}⏳ Waiting for services to be ready...${NC}"
+    
+    local max_attempts=30
+    local attempt=0
+    local backend_ready=false
+    local frontend_ready=false
+    
+    while [ $attempt -lt $max_attempts ]; do
+        sleep 2
+        attempt=$((attempt + 1))
+        
+        # Check backend health
+        if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
+            backend_ready=true
+        fi
+        
+        # Check frontend (vite dev server)
+        if curl -s http://localhost:3000 > /dev/null 2>&1; then
+            frontend_ready=true
+        fi
+        
+        if [ "$backend_ready" = true ] && [ "$frontend_ready" = true ]; then
+            echo -e "\n${GREEN}═══════════════════════════════════════════════════════════${NC}"
+            echo -e "${GREEN}✅ ALL SERVICES READY!${NC}"
+            echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+            echo -e "${BLUE}📱 Telegram WebApp: ${NC}$NGROK_URL"
+            echo -e "${BLUE}🌐 Frontend:        ${NC}http://localhost:3000"
+            echo -e "${BLUE}🔧 Backend API:     ${NC}http://localhost:3001/api"
+            echo -e "${BLUE}🖼️  Image Processor: ${NC}http://localhost:3002"
+            echo -e "${BLUE}🤖 AI Advisor:      ${NC}http://localhost:3003"
+            echo -e "${BLUE}📊 Analytics:       ${NC}http://localhost:3004"
+            echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}\n"
+            return 0
+        fi
+    done
+    
+    echo -e "${YELLOW}⚠️  Some services may still be starting...${NC}"
+    return 1
+}
+
+# Start healthcheck in background
+(healthcheck_services) &
 
 # Run concurrently from backend (where it's installed)
 cd backend

@@ -1,8 +1,16 @@
 {
   "backend/**/*.{ts,tsx}": [
-    "npm run lint --workspace=tzona-v2-backend"
+    "prettier --write",
+    "npm run lint --workspace=tzona-v2-backend --",
+    "npm run typecheck --workspace=tzona-v2-backend --"
   ],
   "frontend/**/*.{ts,tsx,vue}": [
-    "npm run lint --workspace=tzona-v2-frontend"
+    "prettier --write",
+    "npm run lint --workspace=tzona-v2-frontend --",
+    "npm run type-check --workspace=tzona-v2-frontend --"
+  ],
+  "*.{json,md,yaml,yml}": [
+    "prettier --write"
   ]
 }
+

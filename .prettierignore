@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+
+# Build outputs
+dist/
+build/
+.nuxt/
+.output/
+
+# Logs
+logs/
+*.log
+
+# Coverage
+coverage/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+
+# Generated
+*.min.js
+*.min.css
+
+# Python
+services/**/*.py
