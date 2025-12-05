@@ -1,0 +1,413 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  directUrl         = env("DIRECT_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+model Profile {
+  id                  String    @id @default(uuid()) @db.Uuid
+  telegramId          BigInt    @unique @map("telegram_id")
+  firstName           String?   @map("first_name") @db.VarChar(120)
+  lastName            String?   @map("last_name") @db.VarChar(120)
+  pinHash             String?   @map("pin_hash")
+  pinUpdatedAt        DateTime? @map("pin_updated_at") @db.Timestamptz
+  goals               Json      @default("{}")
+  equipment           String[]  @default([])
+  preferences         Json      @default("{}")
+  notificationTime    DateTime? @map("notification_time") @db.Time
+  timezone            String    @default("Europe/Moscow") @db.VarChar(64)
+  notificationsPaused Boolean   @default(false) @map("notifications_paused")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  sessions                 TrainingSession[]
+  trainingPrograms         UserTrainingProgram[]
+  trainingSessionExercises TrainingSessionExercise[]
+  achievements             Achievement[]
+  metrics                  Metric[]
+  notes                    AssistantNote[]
+  dialogStates             DialogState[]
+  dialogEvents             DialogEvent[]
+  observabilityEvents      ObservabilityEvent[]
+  dailyAdviceSelections    DailyAdviceSelection[]
+  exerciseProgress         ExerciseProgress[]
+  operationLogs            OperationLog[]
+
+  @@map("profiles")
+}
+
+model TrainingSession {
+  id                          String                @id @default(uuid()) @db.Uuid
+  profileId                   String                @map("profile_id") @db.Uuid
+  plannedAt                   DateTime              @map("planned_at") @db.Timestamptz
+  status                      TrainingSessionStatus @default(planned)
+  notes                       String?               @db.Text
+  createdAt                   DateTime              @default(now()) @map("created_at")
+  updatedAt                   DateTime              @updatedAt @map("updated_at")
+  disciplineId                String?               @map("discipline_id") @db.Uuid
+  programId                   String?               @map("program_id") @db.Uuid
+  userProgramId               String?               @map("user_program_id") @db.Uuid
+  comment                     String?               @db.Text
+  tabataRounds                Int?                  @map("tabata_rounds")
+  tabataTotalSeconds          Int?                  @map("tabata_total_seconds")
+  workIntervalSeconds         Int?                  @map("work_interval_seconds")
+  restIntervalSeconds         Int?                  @map("rest_interval_seconds")
+  restBetweenSetsSeconds      Int?                  @map("rest_between_sets_seconds")
+  restBetweenExercisesSeconds Int?                  @map("rest_between_exercises_seconds")
+
+  profile          Profile                   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  discipline       TrainingDiscipline?       @relation(fields: [disciplineId], references: [id])
+  program          TrainingProgram?          @relation(fields: [programId], references: [id])
+  userProgram      UserTrainingProgram?      @relation(fields: [userProgramId], references: [id])
+  exercises        TrainingSessionExercise[]
+  exerciseProgress ExerciseProgress[]
+
+  @@index([profileId, plannedAt])
+  @@index([profileId, status, plannedAt(sort: Desc)], map: "training_sessions_profile_status_planned_idx")
+  @@index([profileId, programId, userProgramId], map: "training_sessions_program_bindings_idx")
+  @@map("training_sessions")
+}
+
+model TrainingSessionExercise {
+  id                       String   @id @default(uuid()) @db.Uuid
+  sessionId                String   @map("session_id") @db.Uuid
+  profileId                String   @map("profile_id") @db.Uuid
+  exerciseId               String?  @map("exercise_id") @db.Uuid
+  exerciseKey              String   @map("exercise_key") @db.VarChar(64)
+  exerciseLevelId          String?  @map("exercise_level_id") @db.Uuid
+  levelCode                String   @default("") @map("level_code") @db.VarChar(64)
+  disciplineId             String?  @map("discipline_id") @db.Uuid
+  programId                String?  @map("program_id") @db.Uuid
+  userProgramId            String?  @map("user_program_id") @db.Uuid
+  orderIndex               Int?     @map("order_index")
+  targetSets               Int?     @map("target_sets")
+  targetReps               Int?     @map("target_reps")
+  targetDurationSeconds    Int?     @map("target_duration_seconds")
+  completedSets            Int?     @map("completed_sets")
+  completedReps            Int?     @map("completed_reps")
+  completedDurationSeconds Int?     @map("completed_duration_seconds")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  session       TrainingSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  profile       Profile              @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  exercise      Exercise?            @relation(fields: [exerciseId], references: [id])
+  exerciseLevel ExerciseLevel?       @relation(fields: [exerciseLevelId], references: [id])
+  discipline    TrainingDiscipline?  @relation(fields: [disciplineId], references: [id])
+  program       TrainingProgram?     @relation(fields: [programId], references: [id])
+  userProgram   UserTrainingProgram? @relation(fields: [userProgramId], references: [id])
+
+  @@unique([sessionId, exerciseKey, levelCode], map: "training_session_exercises_session_key_level_uidx")
+  @@index([sessionId], map: "training_session_exercises_session_id_idx")
+  @@index([sessionId, orderIndex], map: "training_session_exercises_session_order_idx")
+  @@index([profileId, sessionId], map: "training_session_exercises_profile_session_idx")
+  @@index([programId, userProgramId], map: "training_session_exercises_program_idx")
+  @@index([exerciseKey], map: "training_session_exercises_exercise_idx")
+  @@map("training_session_exercises")
+}
+
+model ExerciseProgress {
+  id            String   @id @default(uuid()) @db.Uuid
+  sessionId     String   @map("session_id") @db.Uuid
+  profileId     String   @map("profile_id") @db.Uuid
+  exerciseKey   String   @map("exercise_key")
+  levelTarget   String?  @map("level_target")
+  levelResult   String?  @map("level_result")
+  volumeTarget  Int?     @map("volume_target")
+  volumeActual  Int?     @map("volume_actual")
+  rpe           Decimal? @db.Decimal(3, 1)
+  notes         String?
+  decision      String?
+  streakSuccess Int      @default(0) @map("streak_success")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  session TrainingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  profile Profile         @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "exercise_progress_session_id_idx")
+  @@index([profileId, exerciseKey, createdAt], map: "exercise_progress_profile_exercise_idx")
+  @@map("exercise_progress")
+}
+
+model Metric {
+  id         String   @id @default(uuid()) @db.Uuid
+  profileId  String   @map("profile_id") @db.Uuid
+  metricType String   @map("metric_type")
+  value      Decimal  @db.Decimal
+  recordedAt DateTime @default(now()) @map("recorded_at") @db.Timestamptz
+  source     String?
+  unit       String?
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, metricType], map: "metrics_profile_id_metric_type_idx")
+  @@index([profileId, recordedAt], map: "metrics_profile_id_recorded_at_idx")
+  @@map("metrics")
+}
+
+model Achievement {
+  id            String   @id @default(uuid()) @db.Uuid
+  profileId     String   @map("profile_id") @db.Uuid
+  title         String
+  description   String?
+  awardedAt     DateTime @default(now()) @map("awarded_at") @db.Timestamptz
+  triggerSource String?  @map("trigger_source")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId], map: "achievements_profile_id_idx")
+  @@index([profileId, awardedAt], map: "achievements_profile_id_awarded_at_idx")
+  @@map("achievements")
+}
+
+model DailyAdvice {
+  id         String   @id
+  adviceType String   @map("advice_type") @db.VarChar(32)
+  shortText  String   @map("short_text")
+  fullText   String   @map("full_text")
+  ideas      Json     @default("[]")
+  theme      String?  @db.VarChar(64)
+  iconName   String?  @map("icon_name") @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  selections DailyAdviceSelection[]
+
+  @@index([adviceType], map: "daily_advice_advice_type_idx")
+  @@map("daily_advice")
+}
+
+model DailyAdviceSelection {
+  id         String   @id @default(uuid()) @db.Uuid
+  profileId  String   @map("profile_id") @db.Uuid
+  date       DateTime @db.Date
+  adviceId   String   @map("advice_id")
+  selectedAt DateTime @default(now()) @map("selected_at") @db.Timestamptz
+
+  profile Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  advice  DailyAdvice @relation(fields: [adviceId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, date], map: "daily_advice_selection_profile_id_date_key")
+  @@index([profileId, date], map: "daily_advice_selection_profile_id_date_idx")
+  @@map("daily_advice_selection")
+}
+
+model AssistantNote {
+  id        String   @id @default(uuid()) @db.Uuid
+  profileId String   @map("profile_id") @db.Uuid
+  title     String?
+  content   String
+  tags      String[]
+  source    String   @default("chat") @db.VarChar(32)
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId], map: "assistant_notes_profile_id_idx")
+  @@index([profileId, createdAt(sort: Desc)], map: "assistant_notes_profile_id_created_at_idx")
+  @@map("assistant_notes")
+}
+
+model DialogState {
+  id           String    @id @default(uuid()) @db.Uuid
+  profileId    String    @map("profile_id") @db.Uuid
+  stateType    String    @map("state_type") @db.VarChar(64)
+  statePayload Json      @map("state_payload")
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz
+  updatedAt    DateTime  @default(now()) @map("updated_at")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, stateType], map: "dialog_states_profile_id_state_type_key")
+  @@index([stateType, updatedAt], map: "dialog_states_state_type_updated_at_idx")
+  @@index([stateType, expiresAt], map: "dialog_states_state_type_expires_at_idx")
+  @@map("dialog_states")
+}
+
+model DialogEvent {
+  id                String   @id @default(uuid()) @db.Uuid
+  profileId         String?  @map("profile_id") @db.Uuid
+  eventType         String   @map("event_type") @db.VarChar(64)
+  payload           Json     @default("{}")
+  abGroup           String?  @map("ab_group") @db.VarChar(32)
+  responseLatencyMs Int?     @map("response_latency_ms")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  profile Profile? @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId], map: "dialog_events_profile_id_idx")
+  @@map("dialog_events")
+}
+
+model OperationLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  profileId   String?  @map("profile_id") @db.Uuid
+  action      String   @db.VarChar(64)
+  status      String   @db.VarChar(32)
+  payloadHash String?  @map("payload_hash")
+  errorCode   String?  @map("error_code") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  profile Profile? @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, createdAt(sort: Desc)], map: "operation_log_profile_created_at_idx")
+  @@index([status, createdAt(sort: Desc)], map: "operation_log_status_created_at_idx")
+  @@map("operation_log")
+}
+
+model ObservabilityEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  profileId  String?  @map("profile_id") @db.Uuid
+  category   String   @db.VarChar(64)
+  severity   String   @db.VarChar(32)
+  payload    Json     @default("{}")
+  traceId    String?  @map("trace_id")
+  recordedAt DateTime @default(now()) @map("recorded_at") @db.Timestamptz
+  handled    Boolean  @default(false)
+
+  profile Profile? @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId], map: "observability_events_profile_id_idx")
+  @@index([category, severity, recordedAt(sort: Desc)], map: "observability_events_category_severity_recorded_at_idx")
+  @@map("observability_events")
+}
+
+model TrainingProgram {
+  id           String   @id @default(uuid()) @db.Uuid
+  disciplineId String?  @map("discipline_id") @db.Uuid
+  name         String   @unique @db.VarChar(160)
+  description  String?
+  frequency    Int      @default(6)
+  restDay      String?  @map("rest_day") @db.VarChar(16)
+  programData  Json     @map("program_data")
+  isActive     Boolean? @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  discipline       TrainingDiscipline?       @relation(fields: [disciplineId], references: [id])
+  exercises        Exercise[]
+  userPrograms     UserTrainingProgram[]
+  sessions         TrainingSession[]
+  sessionExercises TrainingSessionExercise[]
+
+  @@index([disciplineId], map: "training_programs_discipline_id_idx")
+  @@index([isActive], map: "training_programs_is_active_idx")
+  @@index([disciplineId, isActive], map: "training_programs_discipline_id_is_active_idx")
+  @@index([disciplineId, name], map: "training_programs_discipline_id_name_idx")
+  @@index([disciplineId, isActive, id], map: "training_programs_discipline_id_is_active_id_idx")
+  @@map("training_programs")
+}
+
+model TrainingDiscipline {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(160)
+  description String?
+  imageUrl    String?  @map("image_url")
+  isActive    Boolean? @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  programs         TrainingProgram[]
+  exerciseLevels   ExerciseLevel[]
+  userPrograms     UserTrainingProgram[]
+  sessions         TrainingSession[]
+  sessionExercises TrainingSessionExercise[]
+
+  @@index([isActive], map: "training_disciplines_is_active_idx")
+  @@index([isActive, name], map: "training_disciplines_is_active_name_idx")
+  @@index([isActive, id], map: "training_disciplines_is_active_id_idx")
+  @@map("training_disciplines")
+}
+
+model Exercise {
+  id          String   @id @default(uuid()) @db.Uuid
+  exerciseKey String   @unique @map("exercise_key") @db.VarChar(64)
+  title       String   @db.VarChar(160)
+  focus       String?
+  description String?
+  cue         String?
+  programId   String?  @map("program_id") @db.Uuid
+  iconUrl     String?  @map("icon_url")
+  iconUrlHover String? @map("icon_url_hover")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  levels           ExerciseLevel[]
+  program          TrainingProgram?          @relation(fields: [programId], references: [id])
+  sessionExercises TrainingSessionExercise[]
+
+  @@index([programId], map: "exercises_program_id_idx")
+  @@index([programId, title], map: "exercises_program_id_title_idx")
+  @@map("exercises")
+}
+
+model ExerciseLevel {
+  id           String   @id @default(uuid()) @db.Uuid
+  exerciseKey  String   @map("exercise_key")
+  level        String   @db.VarChar(64)
+  title        String
+  sets         Int?
+  reps         Int?
+  orderIndex   Int?     @map("order_index")
+  execution    String?
+  technique    String?
+  improvement  String?
+  imageUrl     String?  @map("image_url")
+  imageUrl2    String?  @map("image_url_2")
+  imageUrl3    String?  @map("image_url_3")
+  disciplineId String?  @map("discipline_id") @db.Uuid
+  isActive     Boolean? @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @map("updated_at")
+
+  exercise         Exercise                  @relation(fields: [exerciseKey], references: [exerciseKey])
+  discipline       TrainingDiscipline?       @relation(fields: [disciplineId], references: [id])
+  sessionExercises TrainingSessionExercise[]
+
+  @@unique([exerciseKey, level], map: "exercise_levels_exercise_key_level_key")
+  @@index([exerciseKey], map: "exercise_levels_exercise_key_idx")
+  @@index([exerciseKey, orderIndex], map: "exercise_levels_order_idx")
+  @@index([exerciseKey, isActive], map: "exercise_levels_exercise_key_is_active_idx")
+  @@index([exerciseKey, orderIndex, level], map: "exercise_levels_exercise_key_order_level_idx")
+  @@index([disciplineId], map: "exercise_levels_discipline_id_idx")
+  @@index([disciplineId, isActive], map: "exercise_levels_discipline_id_is_active_idx")
+  @@map("exercise_levels")
+}
+
+model UserTrainingProgram {
+  id            String   @id @default(uuid()) @db.Uuid
+  profileId     String   @map("profile_id") @db.Uuid
+  disciplineId  String   @map("discipline_id") @db.Uuid
+  programId     String   @map("program_id") @db.Uuid
+  initialLevels Json?    @map("initial_levels")
+  currentLevels Json?    @map("current_levels")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  profile          Profile                   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  discipline       TrainingDiscipline        @relation(fields: [disciplineId], references: [id], onDelete: Cascade)
+  program          TrainingProgram           @relation(fields: [programId], references: [id], onDelete: Cascade)
+  sessions         TrainingSession[]
+  sessionExercises TrainingSessionExercise[]
+
+  @@unique([profileId], map: "user_training_programs_profile_id_key")
+  @@index([profileId], map: "user_training_programs_profile_id_idx")
+  @@index([disciplineId], map: "user_training_programs_discipline_id_idx")
+  @@index([programId], map: "user_training_programs_program_id_idx")
+  @@index([profileId, isActive], map: "user_training_programs_profile_id_is_active_idx")
+  @@map("user_training_programs")
+}
+
+enum TrainingSessionStatus {
+  planned
+  in_progress
+  done
+  skipped
+}

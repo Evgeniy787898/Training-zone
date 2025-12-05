@@ -1,0 +1,820 @@
+"""TZONA image optimization microservice.
+
+This service exposes an HTTP API used by the Node.js backend to resize and
+re-encode exercise imagery before it is uploaded to the CDN.  The service keeps
+its own validation, logging, and processing pipeline so it can be deployed
+independently from the main application.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import logging
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+import sys
+from typing import Annotated, Literal, Optional
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from PIL import Image, ImageFilter, ImageOps
+from pydantic import BaseModel, Field, field_validator
+from starlette import status
+from starlette.responses import Response
+
+COMMON_DIR = Path(__file__).resolve().parents[1] / "python_shared"
+if COMMON_DIR.exists() and str(COMMON_DIR) not in sys.path:
+    sys.path.append(str(COMMON_DIR))
+
+from graceful_shutdown import GracefulShutdownManager
+from health import HealthReporter, HealthCheckResult
+from metrics import MetricsMiddleware, MetricsRecorder
+from tracing import TraceMiddleware
+from rate_limit import RateLimitConfig, RateLimitMiddleware, RateLimiter
+
+LOGGER = logging.getLogger("tzona.image_processor")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+shutdown_manager = GracefulShutdownManager(service="image-processor", logger=LOGGER)
+
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
+def _canonical_format(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    normalized = value.strip().upper()
+    if normalized == "JPG":
+        return "JPEG"
+    return normalized
+
+
+def _parse_bool(value: Optional[str], fallback: bool) -> bool:
+    if value is None:
+        return fallback
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return fallback
+
+
+def _normalize_hex_color(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not normalized.startswith("#"):
+        normalized = f"#{normalized}"
+    match = re.fullmatch(r"#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", normalized)
+    if not match:
+        return None
+    hex_value = match.group(1)
+    if len(hex_value) in {3, 4}:
+        hex_value = "".join(ch * 2 for ch in hex_value)
+    if len(hex_value) == 6:
+        hex_value += "FF"
+    return f"#{hex_value.upper()}"
+
+
+@dataclass(frozen=True)
+class ProcessorSettings:
+    """Runtime configuration for the optimizer."""
+
+    min_dimension: int = 64
+    max_dimension: int = int(os.getenv("IMAGE_PROCESSOR_MAX_DIMENSION", "4096"))
+    default_max_width: int = int(os.getenv("IMAGE_PROCESSOR_DEFAULT_MAX_WIDTH", "1280"))
+    default_max_height: int = int(os.getenv("IMAGE_PROCESSOR_DEFAULT_MAX_HEIGHT", "1280"))
+    default_quality: int = int(os.getenv("IMAGE_PROCESSOR_DEFAULT_QUALITY", "85"))
+    default_format: str = os.getenv("IMAGE_PROCESSOR_DEFAULT_FORMAT", "webp").upper()
+    allowed_formats: tuple[str, ...] = field(init=False)
+    default_mode: str = os.getenv("IMAGE_PROCESSOR_DEFAULT_MODE", "contain").lower()
+    allowed_modes: tuple[str, ...] = field(init=False)
+    default_background: Optional[str] = field(init=False, default=None)
+    default_strip_metadata: bool = field(
+        init=False,
+        default=_parse_bool(os.getenv("IMAGE_PROCESSOR_STRIP_METADATA_DEFAULT", "true"), True),
+    )
+
+    def clamp_dimension(self, value: Optional[int], fallback: int) -> Optional[int]:
+        if value is None:
+            return fallback
+        return max(self.min_dimension, min(self.max_dimension, value))
+
+    def clamp_quality(self, value: Optional[int]) -> int:
+        fallback = self.default_quality
+        if value is None:
+            return fallback
+        return max(10, min(100, value))
+
+    def __post_init__(self) -> None:
+        raw_formats = os.getenv("IMAGE_PROCESSOR_ALLOWED_FORMATS", "webp,jpeg,png")
+        allowed = []
+        for raw in raw_formats.split(","):
+            normalized = _canonical_format(raw.strip())
+            if normalized:
+                allowed.append(normalized)
+        default_format = _canonical_format(self.default_format) or "WEBP"
+        object.__setattr__(self, "default_format", default_format)
+        if not allowed:
+            allowed = [default_format]
+        if default_format not in allowed:
+            allowed.insert(0, default_format)
+        # Preserve order but drop duplicates
+        seen: dict[str, None] = {}
+        for fmt in allowed:
+            seen.setdefault(fmt, None)
+        object.__setattr__(self, "allowed_formats", tuple(seen.keys()))
+
+        raw_modes = os.getenv("IMAGE_PROCESSOR_ALLOWED_MODES", "contain,cover,fill,stretch,pad")
+        modes: list[str] = []
+        for raw_mode in raw_modes.split(","):
+            normalized_mode = raw_mode.strip().lower()
+            if normalized_mode:
+                modes.append(normalized_mode)
+        if not modes:
+            modes = [self.default_mode]
+        if self.default_mode not in modes:
+            modes.insert(0, self.default_mode)
+        mode_seen: dict[str, None] = {}
+        for mode in modes:
+            mode_seen.setdefault(mode, None)
+        object.__setattr__(self, "allowed_modes", tuple(mode_seen.keys()))
+
+        background = _normalize_hex_color(os.getenv("IMAGE_PROCESSOR_DEFAULT_BACKGROUND"))
+        object.__setattr__(self, "default_background", background)
+
+
+settings = ProcessorSettings()
+
+rate_limit_config = RateLimitConfig.from_env("IMAGE_PROCESSOR")
+rate_limiter = RateLimiter(rate_limit_config)
+metrics_recorder = MetricsRecorder(
+    service="image-processor",
+    environment=os.getenv("ENVIRONMENT", "unknown"),
+)
+
+
+def _resolve_output_format(candidate: Optional[str]) -> str:
+    normalized = _canonical_format(candidate) or settings.default_format
+    if normalized not in settings.allowed_formats:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested format '{normalized}' is not supported",
+        )
+    return normalized
+
+
+class ResizeOptions(BaseModel):
+    maxWidth: Optional[int] = Field(default=None, description="Target width in pixels")
+    maxHeight: Optional[int] = Field(default=None, description="Target height in pixels")
+    mode: Optional[Literal["contain", "cover", "fill", "stretch", "pad"]] = None
+    position: Optional[
+        Literal[
+            "center",
+            "top",
+            "bottom",
+            "left",
+            "right",
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
+        ]
+    ] = Field(default=None, description="Anchor used for cover mode")
+    background: Optional[str] = Field(default=None, description="Hex color (RGB or RGBA)")
+
+    @field_validator("maxWidth", "maxHeight")
+    @classmethod
+    def _validate_dimensions(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        if value < settings.min_dimension or value > settings.max_dimension:
+            raise ValueError(
+                f"Dimensions must be between {settings.min_dimension} and {settings.max_dimension}"
+            )
+        return value
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in settings.allowed_modes:
+            raise ValueError(f"Resize mode '{normalized}' is not supported")
+        return normalized
+
+    @field_validator("background")
+    @classmethod
+    def _validate_background(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_hex_color(value)
+        if not normalized:
+            raise ValueError("Background color must be a valid hex string")
+        return normalized
+
+
+class AdjustmentOptions(BaseModel):
+    grayscale: bool = False
+    sharpen: bool = False
+    stripMetadata: bool = True
+
+
+class ImageProcessRequest(BaseModel):
+    image: str
+    resize: ResizeOptions | None = None
+    quality: Optional[int] = Field(default=None, description="JPEG/WebP quality (10-100)")
+    format: Optional[str] = Field(default=None, description="Target format (e.g. webp)")
+    adjustments: AdjustmentOptions | None = None
+
+    @field_validator("image")
+    @classmethod
+    def _ensure_image_payload(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("Image payload is required")
+        return value
+
+    @field_validator("quality")
+    @classmethod
+    def _validate_quality(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        if value < 10 or value > 100:
+            raise ValueError("Quality must be between 10 and 100")
+        return value
+
+    @field_validator("format")
+    @classmethod
+    def _validate_format(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _canonical_format(value)
+        if not normalized or normalized not in settings.allowed_formats:
+            raise ValueError("Requested format is not supported")
+        return normalized
+
+
+class AppliedOptions(BaseModel):
+    mode: str
+    quality: int
+    background: Optional[str] = None
+    format: str
+    adjustments: AdjustmentOptions
+
+
+class ImageProcessResponse(BaseModel):
+    processedImage: str
+    width: int
+    height: int
+    format: str
+    size: int
+    optimized: bool
+    options: AppliedOptions
+
+
+class ImageUploadParams(BaseModel):
+    maxWidth: Optional[int] = None
+    maxHeight: Optional[int] = None
+    mode: Optional[str] = None
+    position: Optional[str] = None
+    background: Optional[str] = None
+    quality: Optional[int] = None
+    outputFormat: Optional[str] = None
+    grayscale: Optional[bool] = None
+    sharpen: Optional[bool] = None
+    stripMetadata: Optional[bool] = None
+
+    @field_validator("maxWidth", "maxHeight")
+    @classmethod
+    def _validate_dimensions(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        if value < settings.min_dimension or value > settings.max_dimension:
+            raise ValueError(
+                f"Dimensions must be between {settings.min_dimension} and {settings.max_dimension}"
+            )
+        return value
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in settings.allowed_modes:
+            raise ValueError(f"Resize mode '{normalized}' is not supported")
+        return normalized
+
+    @field_validator("position")
+    @classmethod
+    def _validate_position(cls, value: Optional[str]) -> Optional[str]:
+        allowed = {
+            "center",
+            "top",
+            "bottom",
+            "left",
+            "right",
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
+        }
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError("Position is not supported")
+        return normalized
+
+    @field_validator("background")
+    @classmethod
+    def _validate_background(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_hex_color(value)
+        if not normalized:
+            raise ValueError("Background color must be a valid hex string")
+        return normalized
+
+    @field_validator("quality")
+    @classmethod
+    def _validate_quality(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        if value < 10 or value > 100:
+            raise ValueError("Quality must be between 10 and 100")
+        return value
+
+    @field_validator("outputFormat")
+    @classmethod
+    def _validate_output_format(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _canonical_format(value)
+        if not normalized or normalized not in settings.allowed_formats:
+            raise ValueError("Requested format is not supported")
+        return normalized
+
+    def resize_options(self) -> ResizeOptions | None:
+        if not any([
+            self.maxWidth,
+            self.maxHeight,
+            self.mode,
+            self.position,
+            self.background,
+        ]):
+            return None
+        return ResizeOptions(
+            maxWidth=self.maxWidth,
+            maxHeight=self.maxHeight,
+            mode=self.mode,
+            position=self.position,
+            background=self.background,
+        )
+
+    def adjustment_options(self) -> AdjustmentOptions | None:
+        if self.grayscale is None and self.sharpen is None and self.stripMetadata is None:
+            return None
+        return AdjustmentOptions(
+            grayscale=self.grayscale or False,
+            sharpen=self.sharpen or False,
+            stripMetadata=self.stripMetadata if self.stripMetadata is not None else True,
+        )
+
+app = FastAPI(title="TZONA Image Processor", version="1.0.0", lifespan=shutdown_manager.lifespan())
+app.add_middleware(TraceMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=rate_limiter,
+    config=rate_limit_config,
+)
+app.add_middleware(MetricsMiddleware, recorder=metrics_recorder)
+
+health_reporter = HealthReporter(service="image-processor", version=app.version or "unknown")
+
+
+def _runtime_config_check() -> HealthCheckResult:
+    return HealthCheckResult.ok(
+        allowedFormats=list(settings.allowed_formats),
+        allowedModes=list(settings.allowed_modes),
+        maxDimension=settings.max_dimension,
+    )
+
+
+def _pillow_check() -> HealthCheckResult:
+    try:
+        buffer = io.BytesIO()
+        image = Image.new("RGB", (2, 2), color=(255, 0, 0))
+        image.save(buffer, format="PNG")
+        return HealthCheckResult.ok(pillowVersion=Image.__version__)
+    except Exception as exc:  # pragma: no cover - defensive
+        return HealthCheckResult.error(error=str(exc))
+
+
+health_reporter.register("runtime", _runtime_config_check)
+health_reporter.register("pillow", _pillow_check)
+
+
+def _ensure_request_id(request: Request) -> str:
+    if hasattr(request.state, "request_id"):
+        return request.state.request_id
+    request_id = uuid4().hex
+    request.state.request_id = request_id
+    return request_id
+
+
+def _error_response(*, request_id: str, status_code: int, message: str, code: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        headers={REQUEST_ID_HEADER: request_id},
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "requestId": request_id,
+            }
+        },
+    )
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    request_id = request.headers.get(REQUEST_ID_HEADER) or uuid4().hex
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    try:
+        response: Response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
+        LOGGER.info(
+            "request.failed",
+            extra={
+                "path": request.url.path,
+                "method": request.method,
+                "request_id": request_id,
+                "duration_ms": round(duration_ms, 2),
+            },
+        )
+        raise
+    duration_ms = (time.perf_counter() - start) * 1000
+    LOGGER.info(
+        "request.completed",
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "status_code": response.status_code,
+            "request_id": request_id,
+            "duration_ms": round(duration_ms, 2),
+        },
+    )
+    response.headers.setdefault(REQUEST_ID_HEADER, request_id)
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:  # pragma: no cover - exercised via integration tests
+    request_id = _ensure_request_id(request)
+    message = exc.detail if isinstance(exc.detail, str) else "Request failed"
+    LOGGER.warning(
+        "request.http_error",
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "status_code": exc.status_code,
+            "request_id": request_id,
+        },
+    )
+    code = "bad_request" if exc.status_code < status.HTTP_500_INTERNAL_SERVER_ERROR else "server_error"
+    return _error_response(
+        request_id=request_id,
+        status_code=exc.status_code,
+        message=message,
+        code=code,
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    request_id = _ensure_request_id(request)
+    LOGGER.exception(
+        "request.unhandled_error",
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "request_id": request_id,
+        },
+    )
+    return _error_response(
+        request_id=request_id,
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        message="Internal server error",
+        code="internal_error",
+    )
+
+
+def _decode_image(data: str) -> bytes:
+    if data.startswith("data:"):
+        try:
+            _, encoded = data.split(",", 1)
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise HTTPException(status_code=400, detail="Invalid data URI") from exc
+        data = encoded
+    try:
+        return base64.b64decode(data, validate=True)
+    except Exception as exc:  # pylint: disable=broad-except
+        raise HTTPException(status_code=400, detail="Image is not valid base64") from exc
+
+
+def _open_image(raw_bytes: bytes) -> Image.Image:
+    try:
+        image = Image.open(io.BytesIO(raw_bytes))
+        image = ImageOps.exif_transpose(image)
+        return image
+    except Exception as exc:  # pylint: disable=broad-except
+        raise HTTPException(status_code=400, detail="Unsupported or corrupt image") from exc
+
+
+def _resolve_resize_mode(candidate: Optional[str]) -> str:
+    if not candidate:
+        return settings.default_mode
+    normalized = candidate.strip().lower()
+    if normalized not in settings.allowed_modes:
+        raise HTTPException(status_code=400, detail=f"Resize mode '{normalized}' is not supported")
+    return normalized
+
+
+def _resolve_position(candidate: Optional[str]) -> tuple[float, float]:
+    mapping = {
+        "center": (0.5, 0.5),
+        "top": (0.5, 0.0),
+        "bottom": (0.5, 1.0),
+        "left": (0.0, 0.5),
+        "right": (1.0, 0.5),
+        "top-left": (0.0, 0.0),
+        "top-right": (1.0, 0.0),
+        "bottom-left": (0.0, 1.0),
+        "bottom-right": (1.0, 1.0),
+    }
+    if not candidate:
+        return mapping["center"]
+    normalized = candidate.strip().lower()
+    return mapping.get(normalized, mapping["center"])
+
+
+def _resolve_background_color(candidate: Optional[str]) -> Optional[str]:
+    background = candidate or settings.default_background
+    if not background:
+        return None
+    normalized = _normalize_hex_color(background)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Background color must be a valid hex string")
+    return normalized
+
+
+def _color_tuple(hex_color: str | None) -> tuple[int, int, int, int] | None:
+    if not hex_color:
+        return None
+    raw = hex_color.lstrip("#")
+    r = int(raw[0:2], 16)
+    g = int(raw[2:4], 16)
+    b = int(raw[4:6], 16)
+    a = int(raw[6:8], 16)
+    return (r, g, b, a)
+
+
+def _pad_image(image: Image.Image, size: tuple[int, int], background_hex: Optional[str]) -> Image.Image:
+    canvas = Image.new("RGBA", size, _color_tuple(background_hex) or (0, 0, 0, 0))
+    offset = ((size[0] - image.width) // 2, (size[1] - image.height) // 2)
+    mask = image if "A" in image.getbands() else None
+    canvas.paste(image, offset, mask)
+    return canvas
+
+
+def _resize_image(image: Image.Image, options: ResizeOptions | None) -> tuple[Image.Image, AppliedOptions]:
+    width = settings.clamp_dimension(options.maxWidth, settings.default_max_width) if options else None
+    height = settings.clamp_dimension(options.maxHeight, settings.default_max_height) if options else None
+    if width is None and height is None:
+        return image, AppliedOptions(
+            mode=settings.default_mode,
+            quality=settings.default_quality,
+            background=settings.default_background,
+            format=f"image/{settings.default_format.lower()}",
+            adjustments=AdjustmentOptions(stripMetadata=settings.default_strip_metadata),
+        )
+
+    target_width = width or image.width
+    target_height = height or image.height
+    mode = _resolve_resize_mode(options.mode if options else None)
+    background = _resolve_background_color(options.background if options else None)
+
+    if mode == "contain":
+        resized = ImageOps.contain(image, (target_width, target_height), Image.Resampling.LANCZOS)
+        if background and (
+            resized.width != target_width or resized.height != target_height
+        ):
+            resized = _pad_image(resized, (target_width, target_height), background)
+    elif mode == "cover":
+        resized = ImageOps.fit(
+            image,
+            (target_width, target_height),
+            Image.Resampling.LANCZOS,
+            centering=_resolve_position(options.position if options else None),
+        )
+    elif mode == "fill":
+        resized = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    elif mode == "stretch":
+        resized = image.resize((target_width, target_height), Image.Resampling.BICUBIC)
+    else:  # pad
+        resized = ImageOps.contain(image, (target_width, target_height), Image.Resampling.LANCZOS)
+        resized = _pad_image(resized, (target_width, target_height), background)
+
+    return resized, AppliedOptions(
+        mode=mode,
+        quality=settings.default_quality,
+        background=background,
+        format=f"image/{settings.default_format.lower()}",
+        adjustments=AdjustmentOptions(stripMetadata=settings.default_strip_metadata),
+    )
+
+
+def _apply_adjustments(
+    image: Image.Image,
+    adjustments: AdjustmentOptions | None,
+    applied: AppliedOptions,
+) -> tuple[Image.Image, AppliedOptions]:
+    if not adjustments:
+        return image, applied
+    updated = image
+    if adjustments.stripMetadata:
+        updated.info.clear()
+    if adjustments.grayscale:
+        updated = ImageOps.grayscale(updated).convert("RGB")
+    if adjustments.sharpen:
+        updated = updated.filter(ImageFilter.UnsharpMask(radius=1.2, percent=150, threshold=3))
+    applied.adjustments = adjustments
+    return updated, applied
+
+
+def _encode_image(image: Image.Image, *, quality: Optional[int], output_format: str) -> tuple[str, int]:
+    normalized_quality = settings.clamp_quality(quality)
+    buffer = io.BytesIO()
+    params: dict[str, object] = {"format": output_format}
+    if output_format in {"JPEG", "WEBP"}:
+        params["quality"] = normalized_quality
+    if output_format == "JPEG":
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        params["optimize"] = True
+        params["progressive"] = True
+    elif output_format == "WEBP":
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+        params["method"] = 6
+    elif output_format == "PNG":
+        if image.mode == "P":
+            image = image.convert("RGBA")
+        params["optimize"] = True
+        params["compress_level"] = 9
+    image.save(buffer, **params)
+    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return payload, buffer.tell()
+
+
+def _process_bytes(
+    raw_bytes: bytes,
+    resize: ResizeOptions | None,
+    *,
+    quality: Optional[int],
+    output_format: Optional[str],
+    adjustments: AdjustmentOptions | None,
+) -> ImageProcessResponse:
+    started_at = time.perf_counter()
+    inbound_size = len(raw_bytes)
+    try:
+        source_image = _open_image(raw_bytes)
+        requested_format = _resolve_output_format(output_format)
+        resized, applied = _resize_image(source_image, resize)
+        adjusted, applied = _apply_adjustments(resized, adjustments, applied)
+        normalized_quality = settings.clamp_quality(quality)
+        encoded, size = _encode_image(
+            adjusted,
+            quality=normalized_quality,
+            output_format=requested_format,
+        )
+        source_format = _canonical_format(source_image.format) or "UNKNOWN"
+        applied.quality = normalized_quality
+        applied.format = f"image/{requested_format.lower()}"
+        LOGGER.info(
+            "processed image",
+            extra={
+                "width": adjusted.width,
+                "height": adjusted.height,
+                "format": requested_format,
+                "source_format": source_format,
+                "size": size,
+                "quality": normalized_quality,
+                "mode": applied.mode,
+            },
+        )
+        metrics_recorder.increment_counter("image_processor.bytes_in", inbound_size)
+        metrics_recorder.increment_counter("image_processor.bytes_out", size)
+        metrics_recorder.observe_operation(
+            "optimize",
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            success=True,
+            metadata={
+                "format": requested_format,
+                "mode": applied.mode,
+                "width": adjusted.width,
+                "height": adjusted.height,
+            },
+        )
+        return ImageProcessResponse(
+            processedImage=encoded,
+            width=adjusted.width,
+            height=adjusted.height,
+            format=f"image/{requested_format.lower()}",
+            size=size,
+            optimized=True,
+            options=applied,
+        )
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "optimize",
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            success=False,
+            error=str(exc),
+            metadata={"bytes_in": inbound_size},
+        )
+        raise
+
+
+@app.post("/api/process-image", response_model=ImageProcessResponse)
+async def process_image(request: ImageProcessRequest) -> ImageProcessResponse:
+    """Optimise a base64 encoded image."""
+
+    raw_bytes = _decode_image(request.image)
+    return _process_bytes(
+        raw_bytes,
+        request.resize,
+        quality=request.quality,
+        output_format=request.format,
+        adjustments=request.adjustments,
+    )
+
+
+@app.post("/api/process-image/upload", response_model=ImageProcessResponse)
+async def process_uploaded_image(
+    file: Annotated[UploadFile, File(...)],
+    params: Annotated[ImageUploadParams, Depends()],
+) -> ImageProcessResponse:
+    """Optimise an uploaded file. Used by maintenance scripts and tests."""
+
+    content = await file.read()
+    return _process_bytes(
+        content,
+        params.resize_options(),
+        quality=params.quality,
+        output_format=params.outputFormat,
+        adjustments=params.adjustment_options(),
+    )
+
+
+@app.get("/api/health")
+async def health() -> dict[str, object]:
+    return await health_reporter.snapshot()
+
+
+@app.get("/api/metrics")
+async def metrics() -> dict[str, object]:
+    return metrics_recorder.snapshot()
+
+
+@shutdown_manager.callback
+def _log_shutdown_metrics() -> None:
+    """Emit a final metrics snapshot before the process exits."""
+
+    LOGGER.info("image-processor metrics snapshot", extra={"metrics": metrics_recorder.snapshot()})
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "3002")))

@@ -1,0 +1,71 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ExerciseCard snapshots > renders a collapsed card with metadata 1`] = `
+"<article data-v-4ff23b0e="" class="surface-card surface-card--overlay exercise-card"><button data-v-4ff23b0e="" type="button" class="exercise-card__trigger" aria-expanded="false" aria-label="Переключить детали упражнения Планка и баланс">
+    <div data-v-4ff23b0e="" class="exercise-card__thumb" style="background-image: url(&quot;https://cdn.tzona.app/exercises/planche.jpg&quot;);" aria-hidden="true"></div>
+    <div data-v-4ff23b0e="" class="exercise-card__summary">
+      <h3 data-v-4ff23b0e="" class="exercise-card__title">Планка и баланс</h3>
+      <p data-v-4ff23b0e="" class="exercise-card__focus">Кор</p>
+      <div data-v-4ff23b0e="" class="exercise-card__tags" role="list"><span data-v-4ff23b0e="" class="exercise-card__tag" role="listitem">баланс</span><span data-v-4ff23b0e="" class="exercise-card__tag" role="listitem">кор</span></div>
+    </div>
+    <div data-v-4ff23b0e="" class="exercise-card__meta">
+      <div data-v-4ff23b0e="" class="exercise-card__latest"><span data-v-4ff23b0e="" class="exercise-card__level">Уровень 2</span><span data-v-4ff23b0e="" class="exercise-card__date">2024-12-12</span></div><span data-v-4ff23b0e="" class="neon-icon-stub" name="chevronDown" variant="aqua" size="20"></span>
+    </div>
+  </button>
+  <!--v-if-->
+</article>"
+`;
+
+exports[`ExerciseCard snapshots > renders expanded card with history and levels 1`] = `
+"<article data-v-4ff23b0e="" class="surface-card surface-card--overlay exercise-card is-expanded"><button data-v-4ff23b0e="" type="button" class="exercise-card__trigger" aria-expanded="true" aria-label="Переключить детали упражнения Планка и баланс">
+    <div data-v-4ff23b0e="" class="exercise-card__thumb" style="background-image: url(&quot;https://cdn.tzona.app/exercises/planche.jpg&quot;);" aria-hidden="true"></div>
+    <div data-v-4ff23b0e="" class="exercise-card__summary">
+      <h3 data-v-4ff23b0e="" class="exercise-card__title">Планка и баланс</h3>
+      <p data-v-4ff23b0e="" class="exercise-card__focus">Кор</p>
+      <div data-v-4ff23b0e="" class="exercise-card__tags" role="list"><span data-v-4ff23b0e="" class="exercise-card__tag" role="listitem">баланс</span><span data-v-4ff23b0e="" class="exercise-card__tag" role="listitem">кор</span></div>
+    </div>
+    <div data-v-4ff23b0e="" class="exercise-card__meta">
+      <div data-v-4ff23b0e="" class="exercise-card__latest"><span data-v-4ff23b0e="" class="exercise-card__level">Уровень 2</span><span data-v-4ff23b0e="" class="exercise-card__date">2024-12-12</span></div><span data-v-4ff23b0e="" class="neon-icon-stub" name="chevronUp" variant="aqua" size="20"></span>
+    </div>
+  </button>
+  <div data-v-4ff23b0e="" class="exercise-card__details">
+    <p data-v-4ff23b0e="" class="exercise-card__description">Статическая нагрузка для кора и плечевого пояса.</p>
+    <div data-v-4ff23b0e="" class="exercise-card__cue"><span data-v-4ff23b0e="" class="neon-icon-stub" name="spark" variant="aqua" size="22"></span><span data-v-4ff23b0e="">Держи поясницу ровной и смотри вперёд.</span></div>
+    <!--v-if-->
+    <section data-v-4ff23b0e="" class="exercise-card__section" aria-label="Прогрессия упражнений">
+      <h4 data-v-4ff23b0e="" class="exercise-card__section-title">Прогрессия</h4>
+      <div data-v-4ff23b0e="" class="exercise-card__grid">
+        <article data-v-4ff23b0e="" class="exercise-card__level">
+          <div data-v-4ff23b0e="" class="exercise-card__level-number">1</div>
+          <div data-v-4ff23b0e="" class="exercise-card__level-title">Уровень 1</div>
+          <div data-v-4ff23b0e="" class="exercise-card__level-meta">3 × 12</div>
+        </article>
+        <article data-v-4ff23b0e="" class="exercise-card__level">
+          <div data-v-4ff23b0e="" class="exercise-card__level-number">2</div>
+          <div data-v-4ff23b0e="" class="exercise-card__level-title">Уровень 2</div>
+          <div data-v-4ff23b0e="" class="exercise-card__level-meta">4 × 10</div>
+        </article>
+      </div>
+    </section>
+    <section data-v-4ff23b0e="" class="exercise-card__section" aria-label="История тренировок">
+      <h4 data-v-4ff23b0e="" class="exercise-card__section-title">История</h4>
+      <div data-v-4ff23b0e="" class="exercise-card__history">
+        <article data-v-4ff23b0e="" class="exercise-card__history-item">
+          <div data-v-4ff23b0e="">
+            <div data-v-4ff23b0e="" class="exercise-card__history-date">2024-12-01</div>
+            <div data-v-4ff23b0e="" class="exercise-card__history-meta">2 · RPE 7</div>
+          </div>
+          <div data-v-4ff23b0e="" class="exercise-card__history-decision"><span data-v-4ff23b0e="" class="neon-icon-stub" name="rocket" variant="lime" size="20"></span><span data-v-4ff23b0e="">Прогрессируем</span></div>
+        </article>
+        <article data-v-4ff23b0e="" class="exercise-card__history-item">
+          <div data-v-4ff23b0e="">
+            <div data-v-4ff23b0e="" class="exercise-card__history-date">2024-11-28</div>
+            <div data-v-4ff23b0e="" class="exercise-card__history-meta">1 · RPE 6</div>
+          </div>
+          <div data-v-4ff23b0e="" class="exercise-card__history-decision"><span data-v-4ff23b0e="" class="neon-icon-stub" name="target" variant="violet" size="20"></span><span data-v-4ff23b0e="">Закрепляем</span></div>
+        </article>
+      </div>
+    </section>
+  </div>
+</article>"
+`;

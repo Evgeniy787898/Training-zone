@@ -1,0 +1,2174 @@
+openapi: 3.1.0
+info:
+  title: TZONA Public API
+  version: 2.0.0
+  description: |
+    Документация описывает Telegram-first API TZONA V2. Все успешные ответы возвращают
+    стандартную обёртку `{ "success": true, "data": ... }`, а ошибки используют
+    структуру `{ "success": false, "error": { code, message, classification, details } }`.
+    Для защищённых эндпоинтов требуется JWT токен в заголовке `Authorization: Bearer <token>`
+    и CSRF токен в заголовке `X-Csrf-Token`.
+servers:
+  - url: https://api.tzona.app
+    description: Production
+  - url: http://localhost:4000
+    description: Local development
+  - url: https://analytics.tzona.app/api
+    description: Analytics microservice
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+    description: Авторизация и управление сессиями
+  - name: Profile
+    description: Данные профиля и предпочтений
+  - name: Sessions
+    description: Планирование и учёт тренировок
+  - name: Exercises
+    description: Каталоги упражнений и уровней
+  - name: Achievements
+  - name: Daily Advice
+  - name: Reports
+  - name: Assistant
+  - name: Analytics
+    description: Статистика и агрегированные отчёты
+  - name: Monitoring
+    description: Метрики, кеш и служебные статусы
+paths:
+  /api/auth/telegram:
+    post:
+      tags: [Auth]
+      summary: Обмен Telegram initData на JWT токен
+      description: >
+        Проверяет подпись Telegram WebApp initData и выдаёт access token + CSRF токен для клиента.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [initData]
+              properties:
+                initData:
+                  type: string
+                  description: Строка initData, переданная Telegram WebApp
+      responses:
+        '200':
+          description: Успешная валидация initData
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Не удалось подтвердить подпись Telegram
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/auth/verify-pin:
+    post:
+      tags: [Auth]
+      summary: Проверка PIN-кода пользователя
+      description: >
+        Проверяет PIN код, выданный ассистентом. При успехе возвращает новый JWT + CSRF токен.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pin]
+              properties:
+                pin:
+                  type: string
+                  pattern: '^\\d{4}$'
+                telegram_id:
+                  type: integer
+                  format: int64
+                  nullable: true
+                initData:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: PIN проверен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyPinEnvelope'
+        '401':
+          description: Неверный PIN или превышен лимит попыток
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/profile/summary:
+    get:
+      tags: [Profile]
+      summary: Получить сводку профиля
+      responses:
+        '200':
+          description: Текущая статистика профиля
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileSummaryEnvelope'
+        '401':
+          description: Требуется аутентификация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/profile/preferences:
+    patch:
+      tags: [Profile]
+      summary: Обновить предпочтения профиля
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notification_time:
+                  type: string
+                  pattern: '^\\d{2}:\\d{2}$'
+                timezone:
+                  type: string
+                notifications_paused:
+                  type: boolean
+      responses:
+        '200':
+          description: Предпочтения обновлены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePreferencesEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+  /api/sessions/today:
+    get:
+      tags: [Sessions]
+      summary: Получить тренировку на выбранный день
+      parameters:
+        - $ref: '#/components/parameters/DateQuery'
+      responses:
+        '200':
+          description: Актуальная тренировка на день
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTodayEnvelope'
+  /api/sessions/week:
+    get:
+      tags: [Sessions]
+      summary: Получить тренировки на неделю
+      parameters:
+        - $ref: '#/components/parameters/DateQuery'
+      responses:
+        '200':
+          description: План тренировок на неделю
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionWeekEnvelope'
+  /api/sessions:
+    post:
+      tags: [Sessions]
+      summary: Создать или обновить тренировку на конкретную дату
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionWritePayload'
+      responses:
+        '200':
+          description: Тренировка сохранена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSingleEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: Конфликт при повторном сохранении
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/sessions/{id}:
+    get:
+      tags: [Sessions]
+      summary: Получить тренировку по идентификатору
+      parameters:
+        - $ref: '#/components/parameters/SessionIdPath'
+      responses:
+        '200':
+          description: Найденная тренировка
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSingleEnvelope'
+        '404':
+          description: Тренировка не найдена или не принадлежит профилю
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      tags: [Sessions]
+      summary: Обновить существующую тренировку
+      parameters:
+        - $ref: '#/components/parameters/SessionIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionUpdatePayload'
+      responses:
+        '200':
+          description: Тренировка обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSingleEnvelope'
+    delete:
+      tags: [Sessions]
+      summary: Удалить тренировку
+      parameters:
+        - $ref: '#/components/parameters/SessionIdPath'
+      responses:
+        '200':
+          description: Удаление подтверждено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDeleteEnvelope'
+  /api/achievements:
+    get:
+      tags: [Achievements]
+      summary: Получить список достижений
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/FieldsParam'
+      responses:
+        '200':
+          description: Пагинированный список достижений
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AchievementsEnvelope'
+  /api/daily-advice:
+    get:
+      tags: [Daily Advice]
+      summary: Получить карточку ежедневного совета
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [strength, mobility, recovery, nutrition]
+          description: Предпочтительный тип совета
+      responses:
+        '200':
+          description: Совет найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyAdviceEnvelope'
+  /api/exercises/catalog:
+    get:
+      tags: [Exercises]
+      summary: Получить публичный каталог упражнений
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/FieldsParam'
+      responses:
+        '200':
+          description: Каталог упражнений
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExerciseCatalogEnvelope'
+  /api/exercises/{exerciseKey}/levels:
+    get:
+      tags: [Exercises]
+      summary: Получить уровни конкретного упражнения
+      parameters:
+        - name: exerciseKey
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - in: query
+          name: level
+          schema:
+            type: string
+            description: Код уровня для фильтрации
+      responses:
+        '200':
+          description: Список уровней
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExerciseLevelsEnvelope'
+  /api/reports/volume-trend:
+    get:
+      tags: [Reports]
+      summary: Получить отчёт по тренировочному объёму
+      parameters:
+        - in: query
+          name: range
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+        - in: query
+          name: profile_id
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Отчёт построен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeReportEnvelope'
+  /api/reports/rpe-distribution:
+    get:
+      tags: [Reports]
+      summary: Получить распределение сессий по субъективной нагрузке (RPE)
+      parameters:
+        - in: query
+          name: range
+          schema:
+            type: string
+            enum: [30d, 90d]
+        - in: query
+          name: profile_id
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Построено распределение RPE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RpeReportEnvelope'
+  /api/assistant/reply:
+    post:
+      tags: [Assistant]
+      summary: Получить ответ ассистента
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                mode:
+                  type: string
+                  enum: [chat, command]
+                  default: chat
+                persist:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Ответ ассистента
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantReplyEnvelope'
+  /api/assistant/ai-advice:
+    post:
+      tags: [Assistant]
+      summary: Получить совет AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [exerciseKey, currentLevel]
+              properties:
+                exerciseKey:
+                  type: string
+                currentLevel:
+                  type: string
+                performance:
+                  type: object
+                goals:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Совет AI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantAdviceEnvelope'
+  /api/assistant/commands/interpret:
+    post:
+      tags: [Assistant]
+      summary: Распознать команду и извлечь параметры из произвольного текста
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  description: Текст пользователя
+                history:
+                  type: array
+                  maxItems: 10
+                  description: Недавние сообщения для контекста
+                  items:
+                    oneOf:
+                      - type: string
+                      - type: object
+                        additionalProperties: true
+      responses:
+        '200':
+          description: Успешное определение интента и слотов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantCommandInterpretationEnvelope'
+        '401':
+          description: Требуется аутентификация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/assistant/ai-advice/stream:
+    post:
+      tags: [Assistant]
+      summary: Получить потоковый ответ AI советника (Server-Sent Events)
+      description: |
+        Возвращает события `progress`, `advice`, `complete` и `error`, чтобы фронтенд мог показывать
+        ход генерации совета без дополнительного опроса API. Каждое событие содержит `traceId` и текущую стадию.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [exerciseKey, currentLevel]
+              properties:
+                exerciseKey:
+                  type: string
+                  maxLength: 64
+                currentLevel:
+                  type: string
+                  maxLength: 32
+                performance:
+                  type: object
+                  additionalProperties: true
+                goals:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Поток событий с прогрессом и итоговым советом
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: progress
+                  data: {"stage":"accepted","traceId":"abc"}
+
+                  event: advice
+                  data: {"advice":"...","nextSteps":["..."],"tips":["..."]}
+        '401':
+          description: Требуется аутентификация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /stats/{userId}:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Агрегированная статистика по профилю
+      description: Возвращает количество сессий, выполненных упражнений и распределения RPE для заданного профиля.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Статистика профиля
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsStatsResponse'
+        '400':
+          description: Некорректный идентификатор профиля
+        '500':
+          description: Ошибка вычислений или БД
+  /batch/profile-stats:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    post:
+      tags: [Analytics]
+      summary: Батч-расчёт статистики по нескольким профилям
+      description: Позволяет запросить статистику сразу для нескольких профилей за один запрос. Сервис автоматически ограничивает объём выборки и переиспользует кэш для уже рассчитанных профилей.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyticsBatchStatsRequest'
+      responses:
+        '200':
+          description: Батч-ответ со статистикой
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsBatchStatsResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          description: Ошибка вычислений или БД
+  /aggregate:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Общая статистика платформы
+      description: Возвращает ключевые метрики платформы, недельные тренды и ТОП упражнений для аналитических дашбордов.
+      responses:
+        '200':
+          description: Сводка по платформе
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsAggregateResponse'
+        '500':
+          description: Ошибка вычислений или БД
+  /trends/profile/{userId}:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Недельные тренды и прогнозы по профилю
+      description: Возвращает временной ряд и прогноз по объёму, количеству сессий и коэффициенту завершения для заданного профиля.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Прогноз по профилю
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileTrendResponse'
+        '400':
+          description: Некорректный идентификатор профиля
+        '500':
+          description: Ошибка аналитики или БД
+  /trends/platform:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Общие тренды платформы
+      description: Возвращает недельные метрики платформы и прогноз следующей недели на основе линейного тренда.
+      responses:
+        '200':
+          description: Прогноз платформы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformTrendResponse'
+        '500':
+          description: Ошибка аналитики или БД
+  /grouped-metrics:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Сгруппированные метрики с фильтрами
+      description: Позволяет группировать сессии по статусу, дисциплине, программе, неделе или профилю с учётом дополнительных фильтров.
+      parameters:
+        - name: groupBy
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/AnalyticsGroupBy'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AnalyticsSessionStatus'
+          description: Фильтрация по статусу тренировочной сессии.
+        - name: profileId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Ограничить выборку конкретным профилем.
+        - name: programId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Фильтрация по программе или пользовательской программе.
+        - name: disciplineId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Фильтрация по дисциплине упражнения.
+        - name: dateFrom
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Нижняя граница даты (включительно).
+        - name: dateTo
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Верхняя граница даты (включительно).
+      responses:
+        '200':
+          description: Список сгруппированных метрик
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsGroupedMetricsResponse'
+        '400':
+          description: Некорректные фильтры или диапазон дат
+        '500':
+          description: Ошибка аналитики или БД
+  /export:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Экспорт аналитики в JSON или CSV
+      description: >
+        Генерирует экспорт статистики, агрегатов или трендов. Для профилей требуется `profileId`. Поддерживаются форматы JSON
+        и CSV (с автоматическим формированием `Content-Disposition`).
+      parameters:
+        - name: resource
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [profile_stats, aggregate, profile_trends, platform_trends]
+          description: Тип ресурса для экспорта.
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, csv]
+            default: json
+          description: Желаемый формат выгрузки.
+        - name: profileId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Укажите UUID профиля для `profile_stats` и `profile_trends`.
+      responses:
+        '200':
+          description: Экспортированные данные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsExportEnvelope'
+            text/csv:
+              schema:
+                type: string
+                format: binary
+                description: CSV документ с таблицей экспортированных строк.
+        '400':
+          description: Некорректные параметры запроса
+        '500':
+          description: Ошибка аналитики или БД
+  /realtime/metrics:
+    servers:
+      - url: https://analytics.tzona.app/api
+        description: Analytics microservice
+    get:
+      tags: [Analytics]
+      summary: Реал-тайм обновления метрик
+      description: >
+        Сервер отправляет события в формате Server-Sent Events (SSE) с актуальными агрегатами платформы и платформенными
+        трендами. Поток можно потреблять через EventSource/Fetch и отображать обновления без ручного опроса API.
+      responses:
+        '200':
+          description: Поток событий с последними метриками
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: analytics.metrics
+                  data: {"generatedAt":"2024-12-20T12:00:00Z","payload":{"aggregate":{"summary":{"totalProfiles":420}},"platformTrends":{"windowWeeks":8}}}
+        '503':
+          description: Достигнут предел подключений к realtime-потоку
+  /api/cache/status:
+    get:
+      tags: [Monitoring]
+      summary: Снимок слоёв кеша
+      responses:
+        '200':
+          description: Текущая конфигурация кеша
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatusResponse'
+        '500':
+          description: Непредвиденная ошибка
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/metrics/web-vitals:
+    post:
+      tags: [Monitoring]
+      summary: Отправить Core Web Vitals метрику
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebVitalReport'
+      responses:
+        '200':
+          description: Метрика принята
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '400':
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Непредвиденная ошибка
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /api/assistant/notes:
+    get:
+      tags: [Assistant]
+      summary: Получить список заметок
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Список заметок
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantNotesResponse'
+    post:
+      tags: [Assistant]
+      summary: Создать заметку
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Заметка создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantNoteResponse'
+  /api/user-programs:
+    get:
+      tags: [Sessions]
+      summary: Получить активную программу пользователя
+      responses:
+        '200':
+          description: Активная программа
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProgramDetailsResponse'
+    post:
+      tags: [Sessions]
+      summary: Создать или обновить программу пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveUserProgramPayload'
+      responses:
+        '200':
+          description: Программа сохранена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProgramResponse'
+    put:
+      tags: [Sessions]
+      summary: Обновить параметры текущей программы
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserProgramPayload'
+      responses:
+        '200':
+          description: Программа обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProgramResponse'
+  /api/user-programs/create:
+    post:
+      tags: [Sessions]
+      summary: Принудительно создать новую программу
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveUserProgramPayload'
+      responses:
+        '200':
+          description: Программа создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProgramResponse'
+  /api/training-disciplines:
+    get:
+      tags: [Exercises]
+      summary: Получить список дисциплин
+      responses:
+        '200':
+          description: Список дисциплин
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrainingDiscipline'
+  /api/training-programs:
+    get:
+      tags: [Exercises]
+      summary: Получить список программ тренировок
+      parameters:
+        - name: discipline_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Список программ
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrainingProgram'
+  /api/media/exercise-levels/{exerciseKey}/{level}/{slot}:
+    get:
+      tags: [Exercises]
+      summary: Получить изображение уровня упражнения
+      parameters:
+        - name: exerciseKey
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: level
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: slot
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: ['1', '2', '3']
+        - name: maxWidth
+          in: query
+          schema:
+            type: integer
+        - name: maxHeight
+          in: query
+          schema:
+            type: integer
+        - name: quality
+          in: query
+          schema:
+            type: integer
+        - name: format
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Изображение
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    PageParam:
+      in: query
+      name: page
+      schema:
+        type: integer
+        minimum: 1
+      description: Номер страницы (по умолчанию 1)
+    PageSizeParam:
+      in: query
+      name: page_size
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+      description: Размер страницы (по умолчанию 20)
+    FieldsParam:
+      in: query
+      name: fields
+      schema:
+        type: string
+      description: Список полей через запятую для фильтрации ответа
+    DateQuery:
+      in: query
+      name: date
+      schema:
+        type: string
+        format: date
+      description: ISO дата для смещения окна
+    SessionIdPath:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    ValidationError:
+      description: Ошибка валидации входных данных
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    Meta:
+      type: object
+      properties:
+        traceId:
+          type: string
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            pageSize:
+              type: integer
+            total:
+              type: integer
+            totalPages:
+              type: integer
+        fields:
+          type: array
+          items:
+            type: string
+    ErrorObject:
+      type: object
+      required: [code, message, status]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        status:
+          type: integer
+        classification:
+          type: string
+          enum: [validation, authentication, authorization, business, dependencies, internal, not_found]
+        details:
+          type: object
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SuccessEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          description: Полезная нагрузка
+        meta:
+          $ref: '#/components/schemas/Meta'
+      additionalProperties: false
+    TelegramAuthResponse:
+      type: object
+      required: [token, profileId, csrfToken]
+      properties:
+        token:
+          type: string
+        profileId:
+          type: string
+          format: uuid
+        csrfToken:
+          type: string
+        user:
+          type: object
+          additionalProperties: true
+          nullable: true
+    AuthEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TelegramAuthResponse'
+    VerifyPinResponse:
+      type: object
+      required: [valid, message]
+      properties:
+        valid:
+          type: boolean
+        message:
+          type: string
+        token:
+          type: string
+          nullable: true
+        profileId:
+          type: string
+          format: uuid
+          nullable: true
+        csrfToken:
+          type: string
+          nullable: true
+    VerifyPinEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/VerifyPinResponse'
+    ProfileSummary:
+      type: object
+      properties:
+        profile:
+          type: object
+          properties:
+            id:
+              type: string
+            notification_time:
+              type: string
+              nullable: true
+            timezone:
+              type: string
+              nullable: true
+            preferences:
+              type: object
+              additionalProperties: true
+              nullable: true
+            notifications_paused:
+              type: boolean
+              nullable: true
+        adherence:
+          type: object
+          properties:
+            window:
+              type: string
+            total_sessions:
+              type: integer
+            completed_sessions:
+              type: integer
+            adherence_percent:
+              type: integer
+        metrics:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        cached:
+          type: boolean
+    ProfileSummaryEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ProfileSummary'
+    ProfilePreferencesEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                profile:
+                  type: object
+                  additionalProperties: true
+                effective_at:
+                  type: string
+                  format: date-time
+    SessionExercise:
+      type: object
+      properties:
+        id:
+          type: string
+        exerciseKey:
+          type: string
+        title:
+          type: string
+          nullable: true
+        target:
+          type: object
+          properties:
+            level:
+              type: string
+              nullable: true
+            sets:
+              type: integer
+              nullable: true
+            reps:
+              type: integer
+              nullable: true
+            durationSeconds:
+              type: integer
+              nullable: true
+        actual:
+          type: integer
+          nullable: true
+        actualReps:
+          type: integer
+          nullable: true
+        actualSets:
+          type: integer
+          nullable: true
+        order:
+          type: integer
+          nullable: true
+        images:
+          type: array
+          items:
+            type: string
+        image_url:
+          type: string
+          nullable: true
+    SessionPayload:
+      type: object
+      properties:
+        id:
+          type: string
+        profileId:
+          type: string
+        status:
+          type: string
+          enum: [planned, in_progress, done, skipped]
+        notes:
+          type: string
+          nullable: true
+        plannedAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        exercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionExercise'
+    SessionTodayEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                session:
+                  $ref: '#/components/schemas/SessionPayload'
+                  nullable: true
+                source:
+                  type: string
+    SessionWeekEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                week_start:
+                  type: string
+                week_end:
+                  type: string
+                sessions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SessionPayload'
+                source:
+                  type: string
+    SessionSingleEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                session:
+                  $ref: '#/components/schemas/SessionPayload'
+    SessionDeleteEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                message:
+                  type: string
+    SessionWritePayload:
+      type: object
+      required: [planned_at]
+      properties:
+        planned_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [planned, in_progress, done, skipped]
+        notes:
+          type: string
+          nullable: true
+    SessionUpdatePayload:
+      type: object
+      properties:
+        planned_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [planned, in_progress, done, skipped]
+        notes:
+          type: string
+          nullable: true
+    Achievement:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        awardedAt:
+          type: string
+          format: date-time
+        triggerSource:
+          type: string
+          nullable: true
+    AchievementsEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                achievements:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Achievement'
+                pagination:
+                  $ref: '#/components/schemas/PaginationMeta'
+                cached:
+                  type: boolean
+                  nullable: true
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+        totalPages:
+          type: integer
+    DailyAdvice:
+      type: object
+      required: [type, shortText, fullText, icon, theme]
+      properties:
+        type:
+          type: string
+        shortText:
+          type: string
+        fullText:
+          type: string
+        ideas:
+          type: array
+          items:
+            type: string
+        icon:
+          type: string
+        theme:
+          type: string
+    DailyAdviceEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/DailyAdvice'
+    ExerciseLevel:
+      type: object
+      properties:
+        id:
+          type: string
+        level:
+          type: string
+        title:
+          type: string
+        execution:
+          type: string
+        technique:
+          type: string
+        improvement:
+          type: string
+        sets:
+          type: integer
+          nullable: true
+        reps:
+          type: integer
+          nullable: true
+        image1:
+          type: string
+          nullable: true
+    ExerciseCatalogItem:
+      type: object
+      properties:
+        key:
+          type: string
+        title:
+          type: string
+        focus:
+          type: string
+        description:
+          type: string
+        cue:
+          type: string
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExerciseLevel'
+    ExerciseCatalogEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ExerciseCatalogItem'
+                pagination:
+                  $ref: '#/components/schemas/PaginationMeta'
+                cached:
+                  type: boolean
+                  nullable: true
+    ExerciseLevelsEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                exercise_key:
+                  type: string
+                levels:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ExerciseLevel'
+                pagination:
+                  $ref: '#/components/schemas/PaginationMeta'
+    VolumeReport:
+      type: object
+      required: [report, range, chart, summary, source, fallback, generated_at]
+      properties:
+        report:
+          type: string
+          enum: [volume_trend]
+        range:
+          type: string
+        chart:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              volume:
+                type: number
+              status:
+                type: string
+                nullable: true
+        summary:
+          type: object
+          properties:
+            total_volume:
+              type: number
+            average_volume:
+              type: number
+            period_sessions:
+              type: integer
+        source:
+          type: string
+        fallback:
+          type: boolean
+        generated_at:
+          type: string
+          format: date-time
+    VolumeReportEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/VolumeReport'
+    RpeReport:
+      type: object
+      required: [report, range, chart, summary, source, fallback, generated_at]
+      properties:
+        report:
+          type: string
+          enum: [rpe_distribution]
+        range:
+          type: string
+        chart:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              value:
+                type: number
+        summary:
+          type: object
+          properties:
+            total_sessions:
+              type: integer
+            heavy_share:
+              type: number
+            light_share:
+              type: number
+        source:
+          type: string
+        fallback:
+          type: boolean
+        generated_at:
+          type: string
+          format: date-time
+    RpeReportEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/RpeReport'
+    AssistantCommandCandidate:
+      type: object
+      required: [intent, confidence]
+      properties:
+        intent:
+          type: string
+        confidence:
+          type: number
+    AssistantCommandInterpretation:
+      type: object
+      required:
+        [intent, confidence, candidates, entities, slots, needs_clarification, history]
+      properties:
+        intent:
+          type: string
+        raw_intent:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssistantCommandCandidate'
+        entities:
+          type: object
+          additionalProperties: true
+        slots:
+          type: object
+          additionalProperties: true
+        needs_clarification:
+          type: boolean
+        follow_up:
+          type: string
+          nullable: true
+        history:
+          type: array
+          items:
+            type: string
+        profile_id:
+          type: string
+          nullable: true
+    AssistantCommandInterpretationEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AssistantCommandInterpretation'
+    AnalyticsWeeklyStat:
+      type: object
+      properties:
+        weekStart:
+          type: string
+          format: date
+        completedSessions:
+          type: integer
+        totalSessions:
+          type: integer
+        totalVolume:
+          type: integer
+    AnalyticsProgressPoint:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        totalEntries:
+          type: integer
+        buckets:
+          type: object
+          additionalProperties:
+            type: integer
+    AnalyticsStatsResponse:
+      type: object
+      properties:
+        totalSessions:
+          type: integer
+        totalExercises:
+          type: integer
+        averagePerformance:
+          type: number
+          format: float
+        weeklyStats:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsWeeklyStat'
+        progressOverTime:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsProgressPoint'
+    AnalyticsBatchStatsRequest:
+      type: object
+      required: [profileIds]
+      properties:
+        profileIds:
+          type: array
+          minItems: 1
+          maxItems: 25
+          description: Список UUID профилей. При превышении лимита сервис обрежет список до разрешённого значения.
+          items:
+            type: string
+            format: uuid
+    AnalyticsBatchStatsResponse:
+      type: object
+      required: [requested, processed, limit, results]
+      properties:
+        requested:
+          type: integer
+          minimum: 0
+        processed:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          description: Текущий лимит профилей, обрабатываемых за один батч.
+        results:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AnalyticsStatsResponse'
+    AnalyticsAggregateSummary:
+      type: object
+      properties:
+        totalProfiles:
+          type: integer
+        activeProfiles7d:
+          type: integer
+        totalSessions:
+          type: integer
+        completedSessions:
+          type: integer
+        totalVolume:
+          type: integer
+        averageVolumePerSession:
+          type: number
+          format: float
+    AnalyticsAggregateTrend:
+      type: object
+      properties:
+        weekStart:
+          type: string
+          format: date
+        totalSessions:
+          type: integer
+        completedSessions:
+          type: integer
+        uniqueProfiles:
+          type: integer
+        totalVolume:
+          type: integer
+    AnalyticsGroupBy:
+      type: string
+      enum: [status, discipline, program, week, profile]
+      description: Доступные измерения для группировки метрик.
+    AnalyticsSessionStatus:
+      type: string
+      enum: [planned, in_progress, done, skipped]
+      description: Возможные статусы тренировочных сессий.
+    AnalyticsFilters:
+      type: object
+      properties:
+        profileId:
+          type: string
+          format: uuid
+        programId:
+          type: string
+          format: uuid
+        disciplineId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/AnalyticsSessionStatus'
+        dateFrom:
+          type: string
+          format: date
+        dateTo:
+          type: string
+          format: date
+    AnalyticsGroupedMetricEntry:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        totalSessions:
+          type: integer
+        completedSessions:
+          type: integer
+        uniqueProfiles:
+          type: integer
+        totalVolume:
+          type: integer
+    AnalyticsGroupedMetricsResponse:
+      type: object
+      required: [groupBy, generatedAt, appliedFilters, results]
+      properties:
+        groupBy:
+          $ref: '#/components/schemas/AnalyticsGroupBy'
+        generatedAt:
+          type: string
+          format: date-time
+        appliedFilters:
+          $ref: '#/components/schemas/AnalyticsFilters'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsGroupedMetricEntry'
+    AnalyticsTrendInsight:
+      type: object
+      properties:
+        metric:
+          type: string
+          description: Название метрики (totalSessions, completedSessions, totalVolume, completionRate)
+        direction:
+          type: string
+          enum: [up, down, flat]
+        slope:
+          type: number
+          format: float
+        currentValue:
+          type: number
+          format: float
+        forecastValue:
+          type: number
+          format: float
+        confidence:
+          type: number
+          format: float
+          description: R² коэффициент качества тренда (0..1)
+    ProfileTrendResponse:
+      type: object
+      properties:
+        profileId:
+          type: string
+          format: uuid
+        generatedAt:
+          type: string
+          format: date-time
+        windowWeeks:
+          type: integer
+        weeklySeries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsWeeklyStat'
+        insights:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsTrendInsight'
+    PlatformTrendResponse:
+      type: object
+      properties:
+        scope:
+          type: string
+          example: platform
+        generatedAt:
+          type: string
+          format: date-time
+        windowWeeks:
+          type: integer
+        weeklySeries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsWeeklyStat'
+        insights:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsTrendInsight'
+    AnalyticsTopExercise:
+      type: object
+      properties:
+        exerciseKey:
+          type: string
+        usageCount:
+          type: integer
+    AnalyticsAggregateResponse:
+      type: object
+      properties:
+        summary:
+          $ref: '#/components/schemas/AnalyticsAggregateSummary'
+        weeklyTrends:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsAggregateTrend'
+        topExercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsTopExercise'
+    AnalyticsExportEnvelope:
+      type: object
+      required: [resource, format, generatedAt]
+      properties:
+        resource:
+          type: string
+          enum: [profile_stats, aggregate, profile_trends, platform_trends]
+        format:
+          type: string
+          enum: [json, csv]
+        generatedAt:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+        data:
+          description: Полезная нагрузка присутствует только для JSON-ответов
+          nullable: true
+          oneOf:
+            - $ref: '#/components/schemas/AnalyticsStatsResponse'
+            - $ref: '#/components/schemas/AnalyticsAggregateResponse'
+            - $ref: '#/components/schemas/ProfileTrendResponse'
+            - $ref: '#/components/schemas/PlatformTrendResponse'
+    CacheLayerSnapshot:
+      type: object
+      properties:
+        namespace:
+          type: string
+        redis:
+          type: object
+          properties:
+            configured:
+              type: boolean
+            url:
+              type: string
+              nullable: true
+        fallback:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            mode:
+              type: string
+              enum: [disabled, unknown, ready, fallback]
+            failureCount:
+              type: integer
+            lastFailureAt:
+              type: integer
+              nullable: true
+            fallbackUntil:
+              type: integer
+              nullable: true
+            reason:
+              type: string
+              nullable: true
+        memoryEntries:
+          type: integer
+        inflightLoads:
+          type: integer
+    CacheStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/CacheLayerSnapshot'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    WebVitalReport:
+      type: object
+      required: [metric, value, rating, timestamp]
+      properties:
+        metric:
+          type: string
+          enum: [CLS, FID, INP, LCP, TTFB, FCP]
+        value:
+          type: number
+        rating:
+          type: string
+          enum: [good, needs-improvement, poor]
+        navigationType:
+          type: string
+        page:
+          type: string
+        sessionId:
+          type: string
+        timestamp:
+          type: integer
+    AssistantNote:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        profileId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          nullable: true
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+        metadata:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+    AssistantNoteSummary:
+      $ref: '#/components/schemas/AssistantNote'
+    AssistantNotesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                notes:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AssistantNoteSummary'
+    AssistantNoteResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                note:
+                  $ref: '#/components/schemas/AssistantNoteSummary'
+    TrainingDiscipline:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+    TrainingProgram:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        disciplineId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        frequency:
+          type: integer
+        restDay:
+          type: integer
+          nullable: true
+        programData:
+          type: object
+        isActive:
+          type: boolean
+    UserProgramSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        profileId:
+          type: string
+          format: uuid
+        disciplineId:
+          type: string
+          format: uuid
+          nullable: true
+        programId:
+          type: string
+          format: uuid
+          nullable: true
+        initialLevels:
+          type: object
+          additionalProperties:
+            type: number
+        currentLevels:
+          type: object
+          additionalProperties:
+            type: number
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        discipline:
+          $ref: '#/components/schemas/TrainingDiscipline'
+        program:
+          $ref: '#/components/schemas/TrainingProgram'
+    UserProgramDetailsResponse:
+      allOf:
+        - $ref: '#/components/schemas/UserProgramSummary'
+        - type: object
+          properties:
+            source:
+              type: string
+            fallback:
+              type: boolean
+    UserProgramResponse:
+      type: object
+      properties:
+        userProgram:
+          $ref: '#/components/schemas/UserProgramSummary'
+    SaveUserProgramPayload:
+      type: object
+      required: [disciplineId, programId]
+      properties:
+        disciplineId:
+          type: string
+          format: uuid
+        programId:
+          type: string
+          format: uuid
+        initialLevels:
+          type: object
+          additionalProperties:
+            type: number
+        currentLevels:
+          type: object
+          additionalProperties:
+            type: number
+    UpdateUserProgramPayload:
+      type: object
+      properties:
+        disciplineId:
+          type: string
+          format: uuid
+        programId:
+          type: string
+          format: uuid
+        initialLevels:
+          type: object
+          additionalProperties:
+            type: number
+        currentLevels:
+          type: object
+          additionalProperties:
+            type: number
+    AssistantReplyResponse:
+      type: object
+      properties:
+        reply:
+          type: string
+          nullable: true
+        intent:
+          type: string
+        confidence:
+          type: number
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssistantCommandCandidate'
+        saved:
+          type: boolean
+        latency_ms:
+          type: number
+        slow_response:
+          type: boolean
+        latency_alert:
+          type: object
+          nullable: true
+    AssistantAdviceResponse:
+      type: object
+      properties:
+        advice:
+          type: string
+        nextSteps:
+          type: array
+          items:
+            type: string
+        tips:
+          type: array
+          items:
+            type: string
+    AssistantReplyEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AssistantReplyResponse'
+    AssistantAdviceEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AssistantAdviceResponse'

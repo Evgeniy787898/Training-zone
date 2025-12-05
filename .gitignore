@@ -1,0 +1,59 @@
+# Node
+node_modules/
+**/node_modules/
+.npmrc
+npm-debug.log*
+yarn-error.log
+pnpm-lock.yaml
+
+# Logs
+logs/
+**/*.log
+*.log
+
+# Env
+.env
+**/.env
+.env.*
+**/.env.*
+!**/.env.example
+.env.local
+secrets/
+
+# Build artifacts
+/dist/
+**/dist/
+/build/
+**/build/
+/.vite/
+**/.vite/
+/.nuxt/
+/.next/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.venv/
+.venv/
+
+# Prisma
+backend/node_modules/@prisma/
+
+# Coverage
+coverage/
+
+# Local data
+TZONA-V1/server/node_modules/
+TZONA-V1/webapp/node_modules/
+TZONA-V1/webapp/dist/
+TZONA-V1/data/*.db
+
+# Misc
+*.sqlite
+*.sqlite-journal
+.profiles/

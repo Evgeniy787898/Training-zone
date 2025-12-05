@@ -1,0 +1,18 @@
+{
+    "name": "tzona-v2-monorepo",
+    "private": true,
+    "workspaces": [
+        "backend",
+        "frontend"
+    ],
+    "scripts": {
+        "prepare": "husky install",
+        "lint": "npm run lint --workspaces",
+        "test": "npm run test --workspaces",
+        "test:e2e:local": "./scripts/run-e2e.sh"
+    },
+    "devDependencies": {
+        "husky": "^8.0.3",
+        "lint-staged": "^15.2.0"
+    }
+}

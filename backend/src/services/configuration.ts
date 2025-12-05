@@ -1,0 +1,9 @@
+// Re-export configuration functions for convenience
+export { configureDatabaseAvailability } from '../modules/database/databaseAvailability.js';
+export { configureDatabaseRetry } from '../modules/database/databaseRetry.js';
+export { configureCircuitBreaker } from '../modules/infrastructure/circuitBreaker.js';
+export { configurePerformanceMetrics } from '../modules/analytics/performanceMetrics.js';
+export { configureResourceMetrics } from '../modules/analytics/resourceMetrics.js';
+export { configureBusinessMetrics } from '../modules/analytics/businessMetrics.js';
+export { configureMetricsDashboard } from '../services/metricsDashboard.js';
+export { configureHealthSnapshot } from '../modules/infrastructure/health.js';

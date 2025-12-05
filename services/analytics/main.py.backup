@@ -1,0 +1,2001 @@
+"""TZONA V2 analytics microservice."""
+
+import asyncio
+import csv
+import io
+import json
+import logging
+import os
+import sys
+import time
+from datetime import date, datetime, timedelta
+from enum import Enum
+from pathlib import Path
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
+from uuid import UUID
+
+import asyncpg
+from asyncpg.pool import Pool
+from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from pydantic import BaseModel, Field, ValidationError, root_validator, validator
+
+COMMON_DIR = Path(__file__).resolve().parents[1] / "python_shared"
+if COMMON_DIR.exists() and str(COMMON_DIR) not in sys.path:
+    sys.path.append(str(COMMON_DIR))
+
+from cache import AsyncTTLCache, CacheConfig
+from graceful_shutdown import GracefulShutdownManager
+from health import HealthReporter, HealthCheckResult
+from metrics import MetricsMiddleware, MetricsRecorder
+from tracing import TraceMiddleware
+from rate_limit import RateLimitConfig, RateLimitMiddleware, RateLimiter
+
+
+class SessionStatus(str, Enum):
+    PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    SKIPPED = "skipped"
+
+
+class AnalyticsGroupBy(str, Enum):
+    STATUS = "status"
+    DISCIPLINE = "discipline"
+    PROGRAM = "program"
+    WEEK = "week"
+    PROFILE = "profile"
+
+
+class VisualizationType(str, Enum):
+    SESSIONS_TREND = "sessions_trend"
+    DISCIPLINE_BREAKDOWN = "discipline_breakdown"
+    PROGRAM_COMPLETION = "program_completion"
+
+
+class AnalyticsFilters(BaseModel):
+    profileId: Optional[UUID] = None
+    programId: Optional[UUID] = None
+    disciplineId: Optional[UUID] = None
+    status: Optional[SessionStatus] = None
+    dateFrom: Optional[date] = Field(None, description="Start date (inclusive)")
+    dateTo: Optional[date] = Field(None, description="End date (inclusive)")
+
+    @root_validator
+    def _validate_dates(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        start = values.get("dateFrom")
+        end = values.get("dateTo")
+        if start and end and end < start:
+            raise ValueError("dateTo must be greater than or equal to dateFrom")
+        return values
+
+
+class GroupedMetricEntry(BaseModel):
+    key: str
+    label: str
+    totalSessions: int
+    completedSessions: int
+    uniqueProfiles: int
+    totalVolume: int
+
+
+class GroupedMetricsResponse(BaseModel):
+    groupBy: AnalyticsGroupBy
+    generatedAt: datetime
+    appliedFilters: AnalyticsFilters
+    results: List[GroupedMetricEntry]
+
+
+class ChartDataset(BaseModel):
+    label: str
+    data: List[float]
+    borderColor: Optional[str] = None
+    backgroundColor: Optional[Union[str, List[str]]] = None
+    fill: bool = False
+
+
+class VisualizationChart(BaseModel):
+    type: str
+    title: str
+    description: str
+    labels: List[str]
+    datasets: List[ChartDataset]
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VisualizationRequest(BaseModel):
+    visualizationType: VisualizationType
+    filters: AnalyticsFilters = Field(default_factory=AnalyticsFilters)
+
+
+class VisualizationResponse(BaseModel):
+    visualizationType: VisualizationType
+    generatedAt: datetime
+    appliedFilters: AnalyticsFilters
+    chart: VisualizationChart
+    source: Dict[str, Any]
+
+
+class _GroupingConfig(NamedTuple):
+    key_expr_template: str
+    label_expr_template: str
+    join_clause_template: str = ""
+    order_expr: str = "total_sessions DESC, group_label ASC"
+    null_label: str = "Unspecified"
+
+
+GROUPING_CONFIG: Dict[AnalyticsGroupBy, _GroupingConfig] = {
+    AnalyticsGroupBy.STATUS: _GroupingConfig(
+        key_expr_template="{source}.status",
+        label_expr_template="{source}.status",
+        null_label="Unknown status",
+    ),
+    AnalyticsGroupBy.DISCIPLINE: _GroupingConfig(
+        key_expr_template="COALESCE({source}.discipline_id::text, 'unassigned')",
+        label_expr_template="COALESCE(td.name, 'Без категории')",
+        join_clause_template="LEFT JOIN training_disciplines td ON td.id = {source}.discipline_id",
+        null_label="Без категории",
+    ),
+    AnalyticsGroupBy.PROGRAM: _GroupingConfig(
+        key_expr_template="COALESCE({source}.program_id::text, 'unassigned')",
+        label_expr_template="COALESCE(tp.name, 'Без программы')",
+        join_clause_template="LEFT JOIN training_programs tp ON tp.id = {source}.program_id",
+        null_label="Без программы",
+    ),
+    AnalyticsGroupBy.WEEK: _GroupingConfig(
+        key_expr_template="DATE_TRUNC('week', {source}.planned_at)::date",
+        label_expr_template="TO_CHAR(DATE_TRUNC('week', {source}.planned_at), 'IYYY-\"W\"IW')",
+        order_expr="group_key DESC",
+    ),
+    AnalyticsGroupBy.PROFILE: _GroupingConfig(
+        key_expr_template="{source}.profile_id::text",
+        label_expr_template=(
+            "COALESCE(NULLIF(TRIM(CONCAT(p.first_name, ' ', p.last_name)), ''), "
+            "CONCAT('Профиль ', SUBSTRING({source}.profile_id::text, 1, 8)))"
+        ),
+        join_clause_template="LEFT JOIN profiles p ON p.id = {source}.profile_id",
+        null_label="Неизвестный профиль",
+    ),
+}
+
+
+class AnalyticsDatabase:
+    """Manages the analytics Postgres pool and queries."""
+
+    def __init__(
+        self,
+        *,
+        dsn: str,
+        min_size: int = 1,
+        max_size: int = 5,
+        statement_timeout_ms: int = 8000,
+        weekly_limit: int = 8,
+        progress_limit: int = 10,
+        aggregate_weekly_limit: int = 12,
+        top_exercise_limit: int = 5,
+    ) -> None:
+        self._dsn = dsn
+        self._min_size = min_size
+        self._max_size = max(min_size, max_size)
+        self._statement_timeout_ms = statement_timeout_ms
+        self._weekly_limit = max(1, weekly_limit)
+        self._progress_limit = max(1, progress_limit)
+        self._aggregate_weekly_limit = max(1, aggregate_weekly_limit)
+        self._top_exercise_limit = max(1, top_exercise_limit)
+        self._pool: Optional[Pool] = None
+
+    async def connect(self) -> None:
+        if self._pool or not self._dsn:
+            if not self._dsn:
+                raise RuntimeError("ANALYTICS_DATABASE_URL is not configured")
+            return
+        self._pool = await asyncpg.create_pool(
+            dsn=self._dsn,
+            min_size=self._min_size,
+            max_size=self._max_size,
+            command_timeout=self._statement_timeout_ms / 1000,
+            statement_cache_size=0,
+        )
+
+    async def disconnect(self) -> None:
+        if self._pool:
+            await self._pool.close()
+            self._pool = None
+
+    def is_connected(self) -> bool:
+        return self._pool is not None
+
+    async def refresh_views(self) -> None:
+        """Refresh all materialized views concurrently."""
+        if not self._pool:
+            raise RuntimeError("Database pool is not initialized")
+
+        async with self._pool.acquire() as conn:
+            await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY session_volume_mv")
+            await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY profile_rpe_distribution_mv")
+            await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY profile_summary_mv")
+
+    async def fetch_profile_stats(self, profile_id: UUID) -> Dict[str, object]:
+        """Return the stats for a single profile (reuses the batch loader)."""
+
+        batch = await self.fetch_profile_stats_batch([profile_id])
+        return batch.get(profile_id, _empty_profile_stats())
+
+    async def fetch_profile_stats_batch(
+        self, profile_ids: Sequence[UUID]
+    ) -> Dict[UUID, Dict[str, object]]:
+        """Return stats for multiple profiles using batched queries."""
+
+        if not profile_ids:
+            return {}
+        if not self._pool:
+            raise RuntimeError("Database pool is not initialized")
+
+        unique_ids: List[UUID] = []
+        seen = set()
+        for profile_id in profile_ids:
+            if profile_id not in seen:
+                seen.add(profile_id)
+                unique_ids.append(profile_id)
+
+        async with self._pool.acquire() as conn:
+            totals_map = await self._fetch_totals_batch(conn, unique_ids)
+            weekly_map = await self._fetch_weekly_stats_batch(conn, unique_ids)
+            progress_map = await self._fetch_progress_batch(conn, unique_ids)
+
+        results: Dict[UUID, Dict[str, object]] = {}
+        for profile_id in unique_ids:
+            totals = totals_map.get(profile_id, _default_totals_row(profile_id))
+            results[profile_id] = {
+                "totalSessions": totals["total_sessions"],
+                "totalExercises": totals["total_exercises"],
+                "averagePerformance": totals["average_performance"],
+                "weeklyStats": weekly_map.get(profile_id, []),
+                "progressOverTime": progress_map.get(profile_id, []),
+            }
+
+        return results
+
+    async def fetch_aggregate_metrics(self) -> Dict[str, object]:
+        if not self._pool:
+            raise RuntimeError("Database pool is not initialized")
+
+        async with self._pool.acquire() as conn:
+            summary = await self._fetch_global_summary(conn)
+            weekly = await self._fetch_platform_weekly_trends(conn)
+            top_exercises = await self._fetch_top_exercises(conn)
+
+        return {
+            "summary": summary,
+            "weeklyTrends": weekly,
+            "topExercises": top_exercises,
+        }
+
+    async def fetch_profile_trends(self, profile_id: UUID) -> Dict[str, object]:
+        if not self._pool:
+            raise RuntimeError("Database pool is not initialized")
+
+        async with self._pool.acquire() as conn:
+            rows = await self._fetch_weekly_series(conn, profile_id, ascending=True)
+
+        points = [_serialize_weekly_point(row) for row in rows]
+        insights = _build_trend_insights(points)
+        return {
+            "profileId": profile_id,
+            "generatedAt": datetime.utcnow(),
+            "windowWeeks": len(points),
+            "weeklySeries": points,
+            "insights": insights,
+        }
+
+    async def fetch_platform_trends(self) -> Dict[str, object]:
+        if not self._pool:
+            raise RuntimeError("Database pool is not initialized")
+
+        async with self._pool.acquire() as conn:
+            rows = await self._fetch_platform_weekly_trends(conn, order="ASC")
+
+        points = [_serialize_weekly_point(row) for row in rows]
+        insights = _build_trend_insights(points)
+        return {
+            "scope": "platform",
+            "generatedAt": datetime.utcnow(),
+            "windowWeeks": len(points),
+            "weeklySeries": points,
+            "insights": insights,
+        }
+
+    async def fetch_grouped_metrics(
+        self,
+        *,
+        filters: "AnalyticsFilters",
+        group_by: "AnalyticsGroupBy",
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        if not self._pool:
+            raise RuntimeError("Database pool is not initialized")
+        config = GROUPING_CONFIG[group_by]
+        source_alias = "facts"
+        where_clause, params = _build_filter_clause(
+            filters, alias=source_alias, planned_column="planned_at"
+        )
+        params_with_limit = [*params, limit]
+        key_expr = config.key_expr_template.format(source=source_alias)
+        label_expr = config.label_expr_template.format(source=source_alias)
+        join_clause = config.join_clause_template.format(source=source_alias)
+
+        async with self._pool.acquire() as conn:
+            query = f"""
+                SELECT
+                    {key_expr} AS group_key,
+                    {label_expr} AS group_label,
+                    COUNT(*)::bigint AS total_sessions,
+                    COUNT(*) FILTER (WHERE {source_alias}.status = 'done')::bigint AS completed_sessions,
+                    COUNT(DISTINCT {source_alias}.profile_id)::bigint AS unique_profiles,
+                    COALESCE(SUM({source_alias}.total_volume), 0)::bigint AS total_volume
+                FROM session_volume_mv {source_alias}
+                {join_clause}
+                WHERE {where_clause}
+                GROUP BY group_key, group_label
+                ORDER BY {config.order_expr}
+                LIMIT ${len(params_with_limit)}
+            """
+            rows = await conn.fetch(query, *params_with_limit)
+
+        entries: List[Dict[str, object]] = []
+        for row in rows:
+            label_value = row["group_label"]
+            if label_value is None:
+                label_value = config.null_label
+            entries.append(
+                {
+                    "key": _stringify_group_key(row["group_key"]),
+                    "label": str(label_value).strip() or config.null_label,
+                    "totalSessions": int(row["total_sessions"] or 0),
+                    "completedSessions": int(row["completed_sessions"] or 0),
+                    "uniqueProfiles": int(row["unique_profiles"] or 0),
+                    "totalVolume": int(row["total_volume"] or 0),
+                }
+            )
+        return entries
+
+    async def _fetch_totals_batch(
+        self, conn: asyncpg.Connection, profile_ids: Sequence[UUID]
+    ) -> Dict[UUID, Dict[str, object]]:
+        query = """
+            WITH requested AS (
+                SELECT DISTINCT unnest($1::uuid[]) AS profile_id
+            ),
+            session_totals AS (
+                SELECT profile_id, COUNT(*)::bigint AS total_sessions
+                FROM session_volume_mv
+                WHERE profile_id = ANY($1)
+                GROUP BY profile_id
+            ),
+            exercise_totals AS (
+                SELECT profile_id, COUNT(*)::bigint AS total_exercises
+                FROM training_session_exercises
+                WHERE profile_id = ANY($1)
+                GROUP BY profile_id
+            ),
+            avg_volume AS (
+                SELECT profile_id, COALESCE(AVG(total_volume), 0)::double precision AS average_performance
+                FROM session_volume_mv
+                WHERE profile_id = ANY($1)
+                GROUP BY profile_id
+            )
+            SELECT
+                requested.profile_id,
+                COALESCE(session_totals.total_sessions, 0)::bigint AS total_sessions,
+                COALESCE(exercise_totals.total_exercises, 0)::bigint AS total_exercises,
+                COALESCE(avg_volume.average_performance, 0)::double precision AS average_performance
+            FROM requested
+            LEFT JOIN session_totals USING (profile_id)
+            LEFT JOIN exercise_totals USING (profile_id)
+            LEFT JOIN avg_volume USING (profile_id)
+        """
+        rows = await conn.fetch(query, profile_ids)
+        return {row["profile_id"]: dict(row) for row in rows}
+
+    async def _fetch_weekly_stats_batch(
+        self, conn: asyncpg.Connection, profile_ids: Sequence[UUID]
+    ) -> Dict[UUID, List[Dict[str, object]]]:
+        query = """
+            WITH ranked AS (
+                SELECT
+                    profile_id,
+                    DATE_TRUNC('week', session_date)::date AS week_start,
+                    COUNT(*) FILTER (WHERE status = 'done')::bigint AS completed_sessions,
+                    COUNT(*)::bigint AS total_sessions,
+                    COALESCE(SUM(total_volume), 0)::bigint AS total_volume,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY profile_id
+                        ORDER BY DATE_TRUNC('week', session_date) DESC
+                    ) AS row_number
+                FROM session_volume_mv
+                WHERE profile_id = ANY($1)
+                GROUP BY profile_id, week_start
+            )
+            SELECT *
+            FROM ranked
+            WHERE row_number <= $2
+            ORDER BY profile_id, week_start DESC
+        """
+        rows = await conn.fetch(query, profile_ids, self._weekly_limit)
+        grouped: Dict[UUID, List[Dict[str, object]]] = {}
+        for row in rows:
+            grouped.setdefault(row["profile_id"], []).append(_serialize_weekly_point(row))
+        return grouped
+
+    async def _fetch_progress_batch(
+        self, conn: asyncpg.Connection, profile_ids: Sequence[UUID]
+    ) -> Dict[UUID, List[Dict[str, object]]]:
+        query = """
+            WITH aggregated AS (
+                SELECT
+                    profile_id,
+                    entry_date,
+                    jsonb_object_agg(bucket_key, entry_count) AS buckets,
+                    SUM(entry_count)::bigint AS total_entries,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY profile_id
+                        ORDER BY entry_date DESC
+                    ) AS row_number
+                FROM profile_rpe_distribution_mv
+                WHERE profile_id = ANY($1)
+                GROUP BY profile_id, entry_date
+            )
+            SELECT *
+            FROM aggregated
+            WHERE row_number <= $2
+            ORDER BY profile_id, entry_date DESC
+        """
+        rows = await conn.fetch(query, profile_ids, self._progress_limit)
+        grouped: Dict[UUID, List[Dict[str, object]]] = {}
+        for row in rows:
+            buckets = row["buckets"] or {}
+            if isinstance(buckets, str):
+                buckets = {}
+            grouped.setdefault(row["profile_id"], []).append(
+                {
+                    "date": row["entry_date"],
+                    "totalEntries": int(row["total_entries"] or 0),
+                    "buckets": {k: int(v) for k, v in dict(buckets).items()},
+                }
+            )
+        return grouped
+
+    async def _fetch_global_summary(self, conn: asyncpg.Connection) -> Dict[str, object]:
+        profile_row = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)::bigint AS total_profiles,
+                COUNT(*) FILTER (
+                    WHERE updated_at >= (CURRENT_DATE - INTERVAL '7 days')
+                )::bigint AS active_profiles_7d
+            FROM profiles
+            """,
+        )
+        fact_row = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)::bigint AS total_sessions,
+                COUNT(*) FILTER (WHERE status = 'done')::bigint AS completed_sessions,
+                COALESCE(SUM(total_volume), 0)::bigint AS total_volume,
+                COALESCE(AVG(total_volume), 0)::double precision AS avg_volume
+            FROM session_volume_mv
+            """,
+        )
+        return {
+            "totalProfiles": int(profile_row["total_profiles"] or 0),
+            "activeProfiles7d": int(profile_row["active_profiles_7d"] or 0),
+            "totalSessions": int(fact_row["total_sessions"] or 0),
+            "completedSessions": int(fact_row["completed_sessions"] or 0),
+            "totalVolume": int(fact_row["total_volume"] or 0),
+            "averageVolumePerSession": float(fact_row["avg_volume"] or 0.0),
+        }
+
+    async def _fetch_platform_weekly_trends(
+        self, conn: asyncpg.Connection, order: str = "DESC"
+    ) -> List[Dict[str, object]]:
+        order_clause = "ASC" if order.upper() == "ASC" else "DESC"
+        query = f"""
+            SELECT
+                DATE_TRUNC('week', facts.planned_at)::date AS week_start,
+                COUNT(*)::bigint AS total_sessions,
+                COUNT(*) FILTER (WHERE facts.status = 'done')::bigint AS completed_sessions,
+                COUNT(DISTINCT facts.profile_id)::bigint AS unique_profiles,
+                COALESCE(SUM(facts.total_volume), 0)::bigint AS total_volume
+            FROM session_volume_mv facts
+            GROUP BY week_start
+            ORDER BY week_start {order_clause}
+            LIMIT $1
+        """
+        rows = await conn.fetch(query, self._aggregate_weekly_limit)
+        return [
+            {
+                "weekStart": row["week_start"],
+                "totalSessions": int(row["total_sessions"] or 0),
+                "completedSessions": int(row["completed_sessions"] or 0),
+                "uniqueProfiles": int(row["unique_profiles"] or 0),
+                "totalVolume": int(row["total_volume"] or 0),
+            }
+            for row in rows
+        ]
+
+    async def _fetch_top_exercises(self, conn: asyncpg.Connection) -> List[Dict[str, object]]:
+        rows = await conn.fetch(
+            """
+            SELECT
+                exercise_key,
+                COUNT(*)::bigint AS usage_count
+            FROM training_session_exercises
+            GROUP BY exercise_key
+            ORDER BY usage_count DESC, exercise_key ASC
+            LIMIT $1
+            """,
+            self._top_exercise_limit,
+        )
+        return [
+            {"exerciseKey": row["exercise_key"], "usageCount": int(row["usage_count"] or 0)}
+            for row in rows
+        ]
+
+
+def _default_totals_row(profile_id: UUID) -> Dict[str, object]:
+    return {
+        "profile_id": profile_id,
+        "total_sessions": 0,
+        "total_exercises": 0,
+        "average_performance": 0.0,
+    }
+
+
+def _serialize_weekly_point(row: asyncpg.Record) -> Dict[str, object]:
+    return {
+        "weekStart": row["week_start"],
+        "completedSessions": int(row["completed_sessions"] or 0),
+        "totalSessions": int(row["total_sessions"] or 0),
+        "totalVolume": int(row["total_volume"] or 0),
+    }
+
+
+def _build_trend_insights(points: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    if not points:
+        return []
+    sessions = [float(point["totalSessions"]) for point in points]
+    completed = [float(point["completedSessions"]) for point in points]
+    volume = [float(point["totalVolume"]) for point in points]
+    completion_rate: List[float] = []
+    for total, done in zip(sessions, completed):
+        if total <= 0:
+            completion_rate.append(0.0)
+        else:
+            completion_rate.append(done / total)
+
+    insights = [
+        _linear_trend_insight("totalSessions", sessions),
+        _linear_trend_insight("completedSessions", completed),
+        _linear_trend_insight("totalVolume", volume),
+        _linear_trend_insight("completionRate", completion_rate, clamp_min=0.0),
+    ]
+    return [insight for insight in insights if insight is not None]
+
+
+def _linear_trend_insight(
+    metric: str, values: List[float], *, clamp_min: float = 0.0
+) -> Optional[Dict[str, object]]:
+    if not values:
+        return None
+    if len(values) < 2 or all(v == values[0] for v in values):
+        return {
+            "metric": metric,
+            "direction": "flat",
+            "slope": 0.0,
+            "currentValue": float(values[-1]),
+            "forecastValue": float(max(clamp_min, values[-1])),
+            "confidence": 0.0,
+        }
+
+    indexes = list(range(len(values)))
+    mean_x = sum(indexes) / len(indexes)
+    mean_y = sum(values) / len(values)
+    numerator = sum((x - mean_x) * (y - mean_y) for x, y in zip(indexes, values))
+    denominator = sum((x - mean_x) ** 2 for x in indexes) or 1.0
+    slope = numerator / denominator
+    intercept = mean_y - slope * mean_x
+    next_index = len(values)
+    forecast = slope * next_index + intercept
+
+    sse = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(indexes, values))
+    sst = sum((y - mean_y) ** 2 for y in values) or 1.0
+    r_squared = max(0.0, min(1.0, 1 - (sse / sst)))
+
+    baseline = abs(mean_y) if mean_y != 0 else 1.0
+    tolerance = max(0.01, baseline * 0.05)
+    if slope > tolerance:
+        direction = "up"
+    elif slope < -tolerance:
+        direction = "down"
+    else:
+        direction = "flat"
+
+    return {
+        "metric": metric,
+        "direction": direction,
+        "slope": float(slope),
+        "currentValue": float(values[-1]),
+        "forecastValue": float(max(clamp_min, forecast)),
+        "confidence": float(r_squared),
+    }
+
+
+def _build_filter_clause(
+    filters: AnalyticsFilters, *, alias: str = "ts", planned_column: str = "planned_at"
+) -> Tuple[str, List[Any]]:
+    conditions: List[str] = ["1=1"]
+    params: List[Any] = []
+
+    def bind(value: Any) -> str:
+        params.append(value)
+        return f"${len(params)}"
+
+    def column(name: str) -> str:
+        if "." in name:
+            return name
+        return f"{alias}.{name}"
+
+    if filters.profileId:
+        conditions.append(f"{column('profile_id')} = {bind(filters.profileId)}")
+    if filters.programId:
+        conditions.append(f"{column('program_id')} = {bind(filters.programId)}")
+    if filters.disciplineId:
+        conditions.append(f"{column('discipline_id')} = {bind(filters.disciplineId)}")
+    if filters.status:
+        conditions.append(f"{column('status')} = {bind(filters.status.value)}")
+    planned_ref = column(planned_column)
+    if filters.dateFrom:
+        start_dt = datetime.combine(filters.dateFrom, datetime.min.time())
+        conditions.append(f"{planned_ref} >= {bind(start_dt)}")
+    if filters.dateTo:
+        end_dt = datetime.combine(filters.dateTo + timedelta(days=1), datetime.min.time())
+        conditions.append(f"{planned_ref} < {bind(end_dt)}")
+
+    return " AND ".join(conditions), params
+
+
+def _stringify_group_key(value: Any) -> str:
+    if value is None:
+        return "unassigned"
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _build_grouped_cache_key(
+    group_by: AnalyticsGroupBy, filters: AnalyticsFilters
+) -> str:
+    parts = [f"groupBy={group_by.value}"]
+    for field in ("profileId", "programId", "disciplineId", "status", "dateFrom", "dateTo"):
+        value = getattr(filters, field)
+        if value is None:
+            parts.append(f"{field}=null")
+            continue
+        if isinstance(value, Enum):
+            serialized = value.value
+        elif isinstance(value, (datetime, date)):
+            serialized = value.isoformat()
+        else:
+            serialized = str(value)
+        parts.append(f"{field}={serialized}")
+    return "grouped:" + "|".join(parts)
+
+
+def _build_visualization_cache_key(
+    visualization_type: VisualizationType, filters: AnalyticsFilters
+) -> str:
+    parts = [f"type={visualization_type.value}"]
+    for field in ("profileId", "programId", "disciplineId", "status", "dateFrom", "dateTo"):
+        value = getattr(filters, field)
+        if value is None:
+            parts.append(f"{field}=null")
+            continue
+        if isinstance(value, Enum):
+            serialized = value.value
+        elif isinstance(value, (datetime, date)):
+            serialized = value.isoformat()
+        else:
+            serialized = str(value)
+        parts.append(f"{field}={serialized}")
+    return "visualization:" + "|".join(parts)
+
+
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _seconds_from_env(name: str, default: int) -> int:
+    """Read a positive number of seconds from the environment."""
+
+    value = _int_from_env(name, default)
+    return max(1, value)
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    raise TypeError(f"Unsupported type for serialization: {type(value)!r}")
+
+
+def _format_week_label(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _cycle_colors(count: int) -> List[str]:
+    if count <= 0:
+        return []
+    palette = VISUALIZATION_COLOR_PALETTE or ["#2563eb"]
+    return [palette[i % len(palette)] for i in range(count)]
+
+
+def _completion_percentage(total: int, completed: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round(min(100.0, max(0.0, (completed / total) * 100.0)), 1)
+
+
+async def _generate_visualization_chart(
+    visualization_type: VisualizationType, filters: AnalyticsFilters
+) -> Tuple[VisualizationChart, Dict[str, Any]]:
+    if visualization_type == VisualizationType.SESSIONS_TREND:
+        if filters.profileId:
+            source = await database.fetch_profile_trends(filters.profileId)
+            title = "Динамика тренировок профиля"
+            description = "Сколько тренировок выполняет конкретный профиль каждую неделю."
+        else:
+            source = await database.fetch_platform_trends()
+            title = "Динамика тренировок платформы"
+            description = "Общий тренд завершённых тренировок и объёма по всей платформе."
+        points = source.get("weeklySeries", [])
+        labels = [_format_week_label(point.get("weekStart")) for point in points]
+        chart = VisualizationChart(
+            type="line",
+            title=title,
+            description=description,
+            labels=labels,
+            datasets=[
+                ChartDataset(
+                    label="Завершённые тренировки",
+                    data=[float(point.get("completedSessions", 0)) for point in points],
+                    borderColor="#2563eb",
+                    fill=False,
+                ),
+                ChartDataset(
+                    label="Общий объём",
+                    data=[float(point.get("totalVolume", 0)) for point in points],
+                    borderColor="#f97316",
+                    fill=False,
+                ),
+            ],
+            options={"stacked": False, "unit": "sessions"},
+        )
+        return chart, source
+
+    if visualization_type == VisualizationType.DISCIPLINE_BREAKDOWN:
+        rows = await database.fetch_grouped_metrics(
+            filters=filters,
+            group_by=AnalyticsGroupBy.DISCIPLINE,
+            limit=GROUPED_RESULTS_LIMIT,
+        )
+        labels = [row["label"] for row in rows]
+        chart = VisualizationChart(
+            type="doughnut",
+            title="Распределение по дисциплинам",
+            description="Какие типы тренировок чаще всего выполняют пользователи.",
+            labels=labels,
+            datasets=[
+                ChartDataset(
+                    label="Завершённые тренировки",
+                    data=[float(row.get("completedSessions", 0)) for row in rows],
+                    backgroundColor=_cycle_colors(len(rows)),
+                    fill=True,
+                )
+            ],
+            options={"legendPosition": "bottom"},
+        )
+        return chart, {"groupBy": AnalyticsGroupBy.DISCIPLINE.value, "rows": rows}
+
+    if visualization_type == VisualizationType.PROGRAM_COMPLETION:
+        rows = await database.fetch_grouped_metrics(
+            filters=filters,
+            group_by=AnalyticsGroupBy.PROGRAM,
+            limit=GROUPED_RESULTS_LIMIT,
+        )
+        labels = [row["label"] for row in rows]
+        dataset = ChartDataset(
+            label="Завершено, %",
+            data=[
+                _completion_percentage(
+                    int(row.get("totalSessions", 0)), int(row.get("completedSessions", 0))
+                )
+                for row in rows
+            ],
+            borderColor="#a855f7",
+            backgroundColor="rgba(168,85,247,0.25)",
+            fill=True,
+        )
+        chart = VisualizationChart(
+            type="bar",
+            title="Завершённость программ",
+            description="Показывает какой процент тренировок завершён в каждой программе.",
+            labels=labels,
+            datasets=[dataset],
+            options={"yAxisUnit": "percent"},
+        )
+        return chart, {"groupBy": AnalyticsGroupBy.PROGRAM.value, "rows": rows}
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Unsupported visualization type: {visualization_type}",
+    )
+
+
+class RealtimeCapacityError(RuntimeError):
+    """Raised when realtime capacity is exceeded."""
+
+
+class _RealtimeClient:
+    __slots__ = ("queue", "last_activity")
+
+    def __init__(self) -> None:
+        self.queue: "asyncio.Queue[str]" = asyncio.Queue()
+        self.last_activity = time.monotonic()
+
+    def touch(self) -> None:
+        self.last_activity = time.monotonic()
+
+    def is_stale(self, idle_timeout: float) -> bool:
+        return (time.monotonic() - self.last_activity) > idle_timeout
+
+
+class RealtimeMetricsBroadcaster:
+    """Streams aggregate analytics snapshots to SSE clients."""
+
+    def __init__(
+        self,
+        *,
+        loader: Callable[[], Awaitable[Dict[str, Any]]],
+        update_interval_seconds: float,
+        idle_timeout_seconds: float,
+        heartbeat_seconds: float,
+        max_clients: int,
+        logger: logging.Logger,
+    ) -> None:
+        self._loader = loader
+        self._update_interval = max(1.0, update_interval_seconds)
+        self._idle_timeout = max(1.0, idle_timeout_seconds)
+        self._heartbeat = max(1.0, heartbeat_seconds)
+        self._max_clients = max(1, max_clients)
+        self._logger = logger
+        self._clients: Dict[int, _RealtimeClient] = {}
+        self._client_seq = 0
+        self._task: Optional[asyncio.Task[None]] = None
+        self._latest_payload: Optional[str] = None
+        self._lock = asyncio.Lock()
+
+    def start(self) -> None:
+        if not self._task:
+            self._task = asyncio.create_task(self._run(), name="analytics.realtime")
+            self._logger.info("Realtime analytics broadcaster started")
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+            self._logger.info("Realtime analytics broadcaster stopped")
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                try:
+                    if self._clients:
+                        payload = await self._load_payload()
+                        await self._broadcast(payload)
+                        self._latest_payload = payload
+                    await asyncio.sleep(self._update_interval)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # pragma: no cover - defensive logging
+                    self._logger.exception("Realtime broadcast loop failed")
+                    await asyncio.sleep(self._update_interval)
+        except asyncio.CancelledError:
+            pass
+
+    async def _load_payload(self) -> str:
+        snapshot = await self._loader()
+        envelope = {
+            "event": "analytics.metrics",
+            "generatedAt": datetime.utcnow().isoformat() + "Z",
+            "payload": snapshot,
+        }
+        return json.dumps(envelope, default=_json_default)
+
+    async def _broadcast(self, payload: str) -> None:
+        stale: List[int] = []
+        for client_id, client in self._clients.items():
+            if client.is_stale(self._idle_timeout):
+                stale.append(client_id)
+                continue
+            await client.queue.put(payload)
+        for client_id in stale:
+            self._clients.pop(client_id, None)
+
+    async def _add_client(self) -> Tuple[int, _RealtimeClient]:
+        async with self._lock:
+            if len(self._clients) >= self._max_clients:
+                raise RealtimeCapacityError("Realtime capacity reached")
+            self._client_seq += 1
+            client = _RealtimeClient()
+            self._clients[self._client_seq] = client
+            return self._client_seq, client
+
+    async def _remove_client(self, client_id: int) -> None:
+        async with self._lock:
+            self._clients.pop(client_id, None)
+
+    async def iter_events(self, request: Request) -> AsyncGenerator[str, None]:
+        client_id, client = await self._add_client()
+        try:
+            yield "retry: 5000\n\n"
+            if self._latest_payload is not None:
+                await client.queue.put(self._latest_payload)
+            else:
+                payload = await self._load_payload()
+                self._latest_payload = payload
+                await client.queue.put(payload)
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    message = await asyncio.wait_for(
+                        client.queue.get(), timeout=self._heartbeat
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                client.touch()
+                yield f"data: {message}\n\n"
+        finally:
+            await self._remove_client(client_id)
+
+
+def _empty_profile_stats() -> Dict[str, object]:
+    return {
+        "totalSessions": 0,
+        "totalExercises": 0,
+        "averagePerformance": 0.0,
+        "weeklyStats": [],
+        "progressOverTime": [],
+    }
+
+REQUIRED_ENV_VARS = ("ANALYTICS_DATABASE_URL",)
+
+LOGGER = logging.getLogger("tzona.analytics")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+shutdown_manager = GracefulShutdownManager(service="analytics", logger=LOGGER)
+
+app = FastAPI(title="TZONA Analytics", version="1.0.0", lifespan=shutdown_manager.lifespan())
+
+app.add_middleware(TraceMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+rate_limit_config = RateLimitConfig.from_env("ANALYTICS")
+rate_limiter = RateLimiter(rate_limit_config)
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=rate_limiter,
+    config=rate_limit_config,
+)
+metrics_recorder = MetricsRecorder(
+    service="analytics",
+    environment=os.getenv("ENVIRONMENT", "unknown"),
+)
+app.add_middleware(MetricsMiddleware, recorder=metrics_recorder)
+
+health_reporter = HealthReporter(service="analytics", version=app.version or "unknown")
+
+database = AnalyticsDatabase(
+    dsn=os.getenv("ANALYTICS_DATABASE_URL", ""),
+    min_size=_int_from_env("ANALYTICS_DB_POOL_MIN", 1),
+    max_size=_int_from_env("ANALYTICS_DB_POOL_MAX", 5),
+    statement_timeout_ms=_int_from_env("ANALYTICS_DB_STATEMENT_TIMEOUT_MS", 8000),
+    weekly_limit=_int_from_env("ANALYTICS_STATS_WEEKLY_LIMIT", 8),
+    progress_limit=_int_from_env("ANALYTICS_STATS_PROGRESS_LIMIT", 10),
+    aggregate_weekly_limit=_int_from_env("ANALYTICS_AGGREGATE_WEEKLY_LIMIT", 12),
+    top_exercise_limit=_int_from_env("ANALYTICS_TOP_EXERCISE_LIMIT", 5),
+)
+
+cache_config = CacheConfig(
+    namespace="analytics",
+    default_ttl_seconds=float(_seconds_from_env("ANALYTICS_CACHE_DEFAULT_TTL_SECONDS", 30)),
+    max_entries=_int_from_env("ANALYTICS_CACHE_MAX_ENTRIES", 512),
+)
+analytics_cache = AsyncTTLCache(cache_config)
+
+PROFILE_STATS_CACHE_TTL = float(
+    _seconds_from_env("ANALYTICS_CACHE_PROFILE_TTL_SECONDS", 60)
+)
+AGGREGATE_CACHE_TTL = float(
+    _seconds_from_env("ANALYTICS_CACHE_AGGREGATE_TTL_SECONDS", 120)
+)
+TREND_CACHE_TTL = float(_seconds_from_env("ANALYTICS_CACHE_TRENDS_TTL_SECONDS", 300))
+GROUPED_CACHE_TTL = float(
+    _seconds_from_env("ANALYTICS_CACHE_GROUPED_TTL_SECONDS", 120)
+)
+GROUPED_RESULTS_LIMIT = max(
+    1, _int_from_env("ANALYTICS_GROUPED_RESULTS_LIMIT", 25)
+)
+VISUALIZATION_CACHE_TTL = float(
+    _seconds_from_env("ANALYTICS_CACHE_VISUALIZATION_TTL_SECONDS", 90)
+)
+BATCH_PROFILE_LIMIT = max(1, _int_from_env("ANALYTICS_BATCH_PROFILE_LIMIT", 25))
+REALTIME_UPDATE_INTERVAL_SECONDS = float(
+    _seconds_from_env("ANALYTICS_REALTIME_UPDATE_INTERVAL_SECONDS", 15)
+)
+REALTIME_HEARTBEAT_SECONDS = float(
+    _seconds_from_env("ANALYTICS_REALTIME_HEARTBEAT_SECONDS", 10)
+)
+REALTIME_IDLE_TIMEOUT_SECONDS = float(
+    _seconds_from_env("ANALYTICS_REALTIME_IDLE_TIMEOUT_SECONDS", 60)
+)
+REALTIME_MAX_CLIENTS = max(1, _int_from_env("ANALYTICS_REALTIME_MAX_CLIENTS", 100))
+
+VISUALIZATION_COLOR_PALETTE = [
+    "#2563eb",
+    "#0ea5e9",
+    "#10b981",
+    "#f97316",
+    "#f43f5e",
+    "#a855f7",
+    "#14b8a6",
+    "#facc15",
+]
+
+
+async def _load_realtime_snapshot() -> Dict[str, Any]:
+    aggregate = await database.fetch_aggregate_metrics()
+    platform = await database.fetch_platform_trends()
+    return {
+        "aggregate": aggregate,
+        "platformTrends": platform,
+    }
+
+
+realtime_broadcaster = RealtimeMetricsBroadcaster(
+    loader=_load_realtime_snapshot,
+    update_interval_seconds=REALTIME_UPDATE_INTERVAL_SECONDS,
+    idle_timeout_seconds=REALTIME_IDLE_TIMEOUT_SECONDS,
+    heartbeat_seconds=REALTIME_HEARTBEAT_SECONDS,
+    max_clients=REALTIME_MAX_CLIENTS,
+    logger=LOGGER,
+)
+
+shutdown_manager.register(lambda: realtime_broadcaster.stop())
+
+
+async def _load_with_cache(
+    *,
+    key: str,
+    ttl_seconds: float,
+    metric: str,
+    loader: Callable[[], Awaitable[Dict[str, object]]],
+) -> Dict[str, object]:
+    cached = await analytics_cache.get(key)
+    if cached is not None:
+        metrics_recorder.increment_counter(f"{metric}.cache_hit")
+        return cached
+
+    async def _loader() -> Dict[str, object]:
+        metrics_recorder.increment_counter(f"{metric}.cache_miss")
+        return await loader()
+
+    return await analytics_cache.remember(
+        key,
+        _loader,
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def _database_config_health() -> HealthCheckResult:
+    missing = [env for env in REQUIRED_ENV_VARS if not os.getenv(env)]
+    if missing:
+        return HealthCheckResult.degraded(missingEnv=missing)
+    database_url = os.getenv("ANALYTICS_DATABASE_URL", "").strip()
+    return HealthCheckResult.ok(driver=database_url.split(":", 1)[0])
+
+
+def _schedule_health() -> HealthCheckResult:
+    refresh_at = os.getenv("ANALYTICS_REFRESH_AT", "00:00").strip()
+    return HealthCheckResult.ok(refreshAt=refresh_at)
+
+
+health_reporter.register("databaseConfig", _database_config_health)
+health_reporter.register("scheduler", _schedule_health)
+
+
+def _database_connection_health() -> HealthCheckResult:
+    return (
+        HealthCheckResult.ok(poolReady=True)
+        if database.is_connected()
+        else HealthCheckResult.degraded(poolReady=False)
+    )
+
+
+health_reporter.register("databaseConnection", _database_connection_health)
+
+
+@app.on_event("startup")
+async def _connect_database() -> None:
+    await database.connect()
+    realtime_broadcaster.start()
+
+
+class WeeklyStat(BaseModel):
+    weekStart: date
+    completedSessions: int
+    totalSessions: int
+    totalVolume: int
+
+
+class ProgressPoint(BaseModel):
+    date: date
+    totalEntries: int
+    buckets: Dict[str, int]
+
+
+class StatsResponse(BaseModel):
+    totalSessions: int
+    totalExercises: int
+    averagePerformance: float
+    weeklyStats: List[WeeklyStat]
+    progressOverTime: List[ProgressPoint]
+
+
+class BatchStatsRequest(BaseModel):
+    profileIds: List[UUID] = Field(..., min_length=1, description="Список профилей для расчёта")
+
+    @validator("profileIds")
+    def _dedupe(cls, value: List[UUID]) -> List[UUID]:  # noqa: D401 - keep short description
+        """Deduplicate ids while preserving the original order."""
+
+        seen = set()
+        result: List[UUID] = []
+        for profile_id in value:
+            if profile_id not in seen:
+                seen.add(profile_id)
+                result.append(profile_id)
+        return result
+
+
+class BatchStatsResponse(BaseModel):
+    requested: int
+    processed: int
+    limit: int
+    results: Dict[str, StatsResponse]
+
+
+class AggregateSummary(BaseModel):
+    totalProfiles: int
+    activeProfiles7d: int
+    totalSessions: int
+    completedSessions: int
+    totalVolume: int
+    averageVolumePerSession: float
+
+
+class AggregateWeeklyTrend(BaseModel):
+    weekStart: date
+    totalSessions: int
+    completedSessions: int
+    uniqueProfiles: int
+    totalVolume: int
+
+
+class TopExerciseEntry(BaseModel):
+    exerciseKey: str
+    usageCount: int
+
+
+class AggregateResponse(BaseModel):
+    summary: AggregateSummary
+    weeklyTrends: List[AggregateWeeklyTrend]
+    topExercises: List[TopExerciseEntry]
+
+
+class TrendInsight(BaseModel):
+    metric: str
+    direction: str
+    slope: float
+    currentValue: float
+    forecastValue: float
+    confidence: float
+
+
+class WeeklyTrendPoint(WeeklyStat):
+    pass
+
+
+class TrendResponse(BaseModel):
+    generatedAt: datetime
+    windowWeeks: int
+    weeklySeries: List[WeeklyTrendPoint]
+    insights: List[TrendInsight]
+
+
+class ProfileTrendResponse(TrendResponse):
+    profileId: UUID
+
+
+class PlatformTrendResponse(TrendResponse):
+    scope: str
+
+
+class ExportResource(str, Enum):
+    PROFILE_STATS = "profile_stats"
+    AGGREGATE = "aggregate"
+    PROFILE_TRENDS = "profile_trends"
+    PLATFORM_TRENDS = "platform_trends"
+
+
+class ExportFormat(str, Enum):
+    JSON = "json"
+    CSV = "csv"
+
+
+class ExportEnvelope(BaseModel):
+    resource: ExportResource
+    format: ExportFormat
+    generatedAt: datetime
+    metadata: Dict[str, Any]
+    data: Any
+
+
+@app.get("/api/realtime/metrics")
+async def stream_realtime_metrics(request: Request) -> StreamingResponse:
+    async def _event_stream() -> AsyncGenerator[str, None]:
+        async for chunk in realtime_broadcaster.iter_events(request):
+            yield chunk
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    try:
+        return StreamingResponse(_event_stream(), media_type="text/event-stream", headers=headers)
+    except RealtimeCapacityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="realtime capacity reached",
+        ) from exc
+
+
+@app.post("/api/refresh")
+async def refresh_analytics() -> Dict[str, str]:
+    """Force refresh of materialized views."""
+    started = time.perf_counter()
+    try:
+        await database.refresh_views()
+        metrics_recorder.observe_operation(
+            "refresh_views",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+        )
+        return {"status": "ok", "message": "Materialized views refreshed"}
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "refresh_views",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to refresh views: {exc}",
+        )
+
+@app.get("/api/stats/{userId}", response_model=StatsResponse)
+async def get_stats(userId: str) -> StatsResponse:
+    """Получение статистики пользователя"""
+    started = time.perf_counter()
+    try:
+        try:
+            profile_id = UUID(userId)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid profile id") from exc
+
+        async def _loader() -> Dict[str, object]:
+            return await database.fetch_profile_stats(profile_id)
+
+        payload = await _load_with_cache(
+            key=f"stats:profile:{profile_id}",
+            ttl_seconds=PROFILE_STATS_CACHE_TTL,
+            metric="stats.profile",
+            loader=_loader,
+        )
+        response = StatsResponse(**payload)
+        metrics_recorder.increment_counter("stats.generated")
+        metrics_recorder.observe_operation(
+            "fetch_stats",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+            metadata={"userId": userId},
+        )
+        return response
+    except HTTPException:
+        metrics_recorder.observe_operation(
+            "fetch_stats",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error="validation_error",
+            metadata={"userId": userId},
+        )
+        raise
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "fetch_stats",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+            metadata={"userId": userId},
+        )
+        raise
+
+
+@app.post("/api/batch/profile-stats", response_model=BatchStatsResponse)
+async def get_batch_profile_stats(payload: BatchStatsRequest) -> BatchStatsResponse:
+    started = time.perf_counter()
+    unique_ids = payload.profileIds[:BATCH_PROFILE_LIMIT]
+    results: Dict[str, StatsResponse] = {}
+    missing: List[UUID] = []
+    cache_hits = 0
+
+    for profile_id in unique_ids:
+        cached = await analytics_cache.get(f"stats:profile:{profile_id}")
+        if cached is not None:
+            cache_hits += 1
+            results[str(profile_id)] = StatsResponse(**cached)
+        else:
+            missing.append(profile_id)
+
+    if cache_hits:
+        metrics_recorder.increment_counter(
+            "stats.profile.batch.cache_hit", value=float(cache_hits)
+        )
+
+    if missing:
+        metrics_recorder.increment_counter(
+            "stats.profile.batch.cache_miss", value=float(len(missing))
+        )
+        batch_payload = await database.fetch_profile_stats_batch(missing)
+        for profile_id in missing:
+            stats = batch_payload.get(profile_id, _empty_profile_stats())
+            await analytics_cache.set(
+                f"stats:profile:{profile_id}", stats, ttl_seconds=PROFILE_STATS_CACHE_TTL
+            )
+            results[str(profile_id)] = StatsResponse(**stats)
+
+    metrics_recorder.observe_operation(
+        "fetch_profile_stats_batch",
+        duration_ms=(time.perf_counter() - started) * 1000,
+        success=True,
+        metadata={
+            "requested": len(payload.profileIds),
+            "processed": len(unique_ids),
+            "limit": BATCH_PROFILE_LIMIT,
+        },
+    )
+
+    return BatchStatsResponse(
+        requested=len(payload.profileIds),
+        processed=len(unique_ids),
+        limit=BATCH_PROFILE_LIMIT,
+        results=results,
+    )
+
+
+@app.get("/api/aggregate", response_model=AggregateResponse)
+async def get_aggregate_metrics() -> AggregateResponse:
+    started = time.perf_counter()
+    try:
+        async def _loader() -> Dict[str, object]:
+            return await database.fetch_aggregate_metrics()
+
+        payload = await _load_with_cache(
+            key="aggregate:platform",
+            ttl_seconds=AGGREGATE_CACHE_TTL,
+            metric="aggregate",
+            loader=_loader,
+        )
+        metrics_recorder.increment_counter("aggregate.generated")
+        metrics_recorder.observe_operation(
+            "fetch_aggregate",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+        )
+        return AggregateResponse(**payload)
+    except Exception as exc:  # pragma: no cover - surfaced via monitoring
+        metrics_recorder.observe_operation(
+            "fetch_aggregate",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+        )
+        raise
+
+
+@app.get("/api/trends/profile/{userId}", response_model=ProfileTrendResponse)
+async def get_profile_trends(userId: str) -> ProfileTrendResponse:
+    started = time.perf_counter()
+    try:
+        try:
+            profile_id = UUID(userId)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid profile id") from exc
+
+        async def _loader() -> Dict[str, object]:
+            return await database.fetch_profile_trends(profile_id)
+
+        payload = await _load_with_cache(
+            key=f"trends:profile:{profile_id}",
+            ttl_seconds=TREND_CACHE_TTL,
+            metric="trends.profile",
+            loader=_loader,
+        )
+        metrics_recorder.increment_counter("trends.profile.generated")
+        metrics_recorder.observe_operation(
+            "fetch_profile_trends",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+            metadata={"userId": userId},
+        )
+        return ProfileTrendResponse(**payload)
+    except HTTPException:
+        metrics_recorder.observe_operation(
+            "fetch_profile_trends",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error="validation_error",
+            metadata={"userId": userId},
+        )
+        raise
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "fetch_profile_trends",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+            metadata={"userId": userId},
+        )
+        raise
+
+
+@app.get("/api/trends/platform", response_model=PlatformTrendResponse)
+async def get_platform_trends() -> PlatformTrendResponse:
+    started = time.perf_counter()
+    try:
+        async def _loader() -> Dict[str, object]:
+            return await database.fetch_platform_trends()
+
+        payload = await _load_with_cache(
+            key="trends:platform",
+            ttl_seconds=TREND_CACHE_TTL,
+            metric="trends.platform",
+            loader=_loader,
+        )
+        metrics_recorder.increment_counter("trends.platform.generated")
+        metrics_recorder.observe_operation(
+            "fetch_platform_trends",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+        )
+        return PlatformTrendResponse(**payload)
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "fetch_platform_trends",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+        )
+        raise
+
+
+@app.get("/api/grouped-metrics", response_model=GroupedMetricsResponse)
+async def get_grouped_metrics(
+    groupBy: AnalyticsGroupBy,
+    sessionStatus: Optional[SessionStatus] = Query(None, alias="status"),
+    profileId: Optional[UUID] = Query(None),
+    programId: Optional[UUID] = Query(None),
+    disciplineId: Optional[UUID] = Query(None),
+    dateFrom: Optional[date] = Query(None),
+    dateTo: Optional[date] = Query(None),
+):
+    started = time.perf_counter()
+    try:
+        try:
+            filters = AnalyticsFilters(
+                profileId=profileId,
+                programId=programId,
+                disciplineId=disciplineId,
+                status=sessionStatus,
+                dateFrom=dateFrom,
+                dateTo=dateTo,
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.errors()) from exc
+
+        async def _loader() -> Dict[str, object]:
+            rows = await database.fetch_grouped_metrics(
+                filters=filters,
+                group_by=groupBy,
+                limit=GROUPED_RESULTS_LIMIT,
+            )
+            return {"results": rows}
+
+        cache_key = _build_grouped_cache_key(groupBy, filters)
+        payload = await _load_with_cache(
+            key=cache_key,
+            ttl_seconds=GROUPED_CACHE_TTL,
+            metric="grouped.metrics",
+            loader=_loader,
+        )
+        metrics_recorder.observe_operation(
+            "grouped_metrics",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+            metadata={"groupBy": groupBy.value},
+        )
+        return GroupedMetricsResponse(
+            groupBy=groupBy,
+            generatedAt=datetime.utcnow(),
+            appliedFilters=filters,
+            results=[GroupedMetricEntry(**entry) for entry in payload["results"]],
+        )
+    except HTTPException:
+        metrics_recorder.observe_operation(
+            "grouped_metrics",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error="validation_error",
+            metadata={"groupBy": groupBy.value},
+        )
+        raise
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "grouped_metrics",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+            metadata={"groupBy": groupBy.value},
+        )
+        raise
+
+
+@app.post("/api/visualizations", response_model=VisualizationResponse)
+async def create_visualization(payload: VisualizationRequest) -> VisualizationResponse:
+    started = time.perf_counter()
+    filters = payload.filters or AnalyticsFilters()
+    cache_key = _build_visualization_cache_key(payload.visualizationType, filters)
+
+    async def _loader() -> Dict[str, Any]:
+        chart, source = await _generate_visualization_chart(payload.visualizationType, filters)
+        return {"chart": chart.dict(), "source": source}
+
+    try:
+        cached = await _load_with_cache(
+            key=cache_key,
+            ttl_seconds=VISUALIZATION_CACHE_TTL,
+            metric="visualizations",
+            loader=_loader,
+        )
+        metrics_recorder.observe_operation(
+            "visualizations",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+            metadata={"type": payload.visualizationType.value},
+        )
+        return VisualizationResponse(
+            visualizationType=payload.visualizationType,
+            generatedAt=datetime.utcnow(),
+            appliedFilters=filters,
+            chart=VisualizationChart(**cached["chart"]),
+            source=cached["source"],
+        )
+    except HTTPException:
+        metrics_recorder.observe_operation(
+            "visualizations",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error="validation_error",
+            metadata={"type": payload.visualizationType.value},
+        )
+        raise
+    except Exception as exc:
+        metrics_recorder.observe_operation(
+            "visualizations",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+            metadata={"type": payload.visualizationType.value},
+        )
+        raise
+
+
+@app.get(
+    "/api/export",
+    response_model=ExportEnvelope,
+    responses={
+        200: {
+            "content": {
+                "application/json": {},
+                "text/csv": {
+                    "schema": {"type": "string", "description": "CSV export"}
+                },
+            }
+        }
+    },
+)
+async def export_analytics(
+    resource: ExportResource,
+    format: ExportFormat = ExportFormat.JSON,
+    profileId: Optional[str] = None,
+):
+    """Export analytics datasets in JSON or CSV format."""
+
+    started = time.perf_counter()
+    metadata: Dict[str, Any] = {"resource": resource.value}
+    profile_uuid: Optional[UUID] = None
+
+    try:
+        if resource in (ExportResource.PROFILE_STATS, ExportResource.PROFILE_TRENDS):
+            if not profileId:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="profileId is required for the selected resource",
+                )
+            try:
+                profile_uuid = UUID(profileId)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="invalid profile id",
+                ) from exc
+            metadata["profileId"] = str(profile_uuid)
+
+        loader: Callable[[], Awaitable[Dict[str, object]]]
+        cache_key: str
+        ttl_seconds: float
+        metric: str
+
+        if resource == ExportResource.PROFILE_STATS and profile_uuid:
+            cache_key = f"stats:profile:{profile_uuid}"
+            ttl_seconds = PROFILE_STATS_CACHE_TTL
+            metric = "stats.profile"
+
+            async def _loader() -> Dict[str, object]:
+                return await database.fetch_profile_stats(profile_uuid)
+
+        elif resource == ExportResource.AGGREGATE:
+            cache_key = "aggregate:platform"
+            ttl_seconds = AGGREGATE_CACHE_TTL
+            metric = "aggregate"
+
+            async def _loader() -> Dict[str, object]:
+                return await database.fetch_aggregate_metrics()
+
+        elif resource == ExportResource.PROFILE_TRENDS and profile_uuid:
+            cache_key = f"trends:profile:{profile_uuid}"
+            ttl_seconds = TREND_CACHE_TTL
+            metric = "trends.profile"
+
+            async def _loader() -> Dict[str, object]:
+                return await database.fetch_profile_trends(profile_uuid)
+
+        elif resource == ExportResource.PLATFORM_TRENDS:
+            cache_key = "trends:platform"
+            ttl_seconds = TREND_CACHE_TTL
+            metric = "trends.platform"
+
+            async def _loader() -> Dict[str, object]:
+                return await database.fetch_platform_trends()
+
+        else:  # pragma: no cover - guarded by enums
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="unsupported resource",
+            )
+
+        payload = await _load_with_cache(
+            key=cache_key,
+            ttl_seconds=ttl_seconds,
+            metric=metric,
+            loader=_loader,
+        )
+
+        metrics_recorder.observe_operation(
+            "export_analytics",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+            metadata=metadata,
+        )
+
+        generated_at = datetime.utcnow()
+        if format == ExportFormat.CSV:
+            csv_body = _serialize_export_csv(resource, payload)
+            filename = f"{resource.value}-{generated_at.strftime('%Y%m%dT%H%M%SZ')}.csv"
+            return PlainTextResponse(
+                content=csv_body,
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}",
+                    "X-Export-Resource": resource.value,
+                },
+            )
+
+        envelope = ExportEnvelope(
+            resource=resource,
+            format=format,
+            generatedAt=generated_at,
+            metadata=metadata,
+            data=payload,
+        )
+        return JSONResponse(content=json.loads(envelope.json()))
+    except HTTPException as exc:
+        metrics_recorder.observe_operation(
+            "export_analytics",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc.detail),
+            metadata=metadata,
+        )
+        raise
+    except Exception as exc:  # pragma: no cover - surfaced via monitoring
+        metrics_recorder.observe_operation(
+            "export_analytics",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=False,
+            error=str(exc),
+            metadata=metadata,
+        )
+        raise
+
+@app.get("/api/health")
+async def health():
+    return await health_reporter.snapshot()
+
+
+@app.get("/api/metrics")
+async def metrics():
+    return metrics_recorder.snapshot()
+
+
+@shutdown_manager.callback
+def _log_shutdown_metrics() -> None:
+    LOGGER.info("analytics metrics snapshot", extra={"metrics": metrics_recorder.snapshot()})
+
+
+@shutdown_manager.callback
+async def _close_database() -> None:
+    await database.disconnect()
+
+
+def _serialize_export_csv(resource: ExportResource, payload: Dict[str, Any]) -> str:
+    if resource == ExportResource.PROFILE_STATS:
+        rows, columns = _profile_stats_export_rows(payload)
+    elif resource == ExportResource.AGGREGATE:
+        rows, columns = _aggregate_export_rows(payload)
+    elif resource == ExportResource.PROFILE_TRENDS:
+        rows, columns = _trend_export_rows(payload, include_profile=True)
+    elif resource == ExportResource.PLATFORM_TRENDS:
+        rows, columns = _trend_export_rows(payload, include_profile=False)
+    else:  # pragma: no cover - enums guard available values
+        rows, columns = [], []
+
+    buffer = io.StringIO()
+    if not columns:
+        columns = ["section", "metric", "value"]
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({column: _format_csv_value(row.get(column)) for column in columns})
+    return buffer.getvalue()
+
+
+def _profile_stats_export_rows(payload: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    rows: List[Dict[str, Any]] = []
+    totals = {
+        "totalSessions": payload.get("totalSessions", 0),
+        "totalExercises": payload.get("totalExercises", 0),
+        "averagePerformance": payload.get("averagePerformance", 0.0),
+    }
+    for metric, value in totals.items():
+        rows.append({"section": "totals", "metric": metric, "value": value})
+
+    for entry in payload.get("weeklyStats", []):
+        rows.append(
+            {
+                "section": "weeklyStats",
+                "weekStart": entry.get("weekStart"),
+                "completedSessions": entry.get("completedSessions"),
+                "totalSessions": entry.get("totalSessions"),
+                "totalVolume": entry.get("totalVolume"),
+            }
+        )
+
+    for entry in payload.get("progressOverTime", []):
+        rows.append(
+            {
+                "section": "progressOverTime",
+                "date": entry.get("date"),
+                "totalEntries": entry.get("totalEntries"),
+                "buckets": entry.get("buckets"),
+            }
+        )
+
+    columns = [
+        "section",
+        "metric",
+        "value",
+        "weekStart",
+        "completedSessions",
+        "totalSessions",
+        "totalVolume",
+        "date",
+        "totalEntries",
+        "buckets",
+    ]
+    return rows, columns
+
+
+def _aggregate_export_rows(payload: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    rows: List[Dict[str, Any]] = []
+    summary = payload.get("summary", {})
+    for metric, value in summary.items():
+        rows.append({"section": "summary", "metric": metric, "value": value})
+
+    for entry in payload.get("weeklyTrends", []):
+        rows.append(
+            {
+                "section": "weeklyTrends",
+                "weekStart": entry.get("weekStart"),
+                "totalSessions": entry.get("totalSessions"),
+                "completedSessions": entry.get("completedSessions"),
+                "uniqueProfiles": entry.get("uniqueProfiles"),
+                "totalVolume": entry.get("totalVolume"),
+            }
+        )
+
+    for entry in payload.get("topExercises", []):
+        rows.append(
+            {
+                "section": "topExercises",
+                "exerciseKey": entry.get("exerciseKey"),
+                "usageCount": entry.get("usageCount"),
+            }
+        )
+
+    columns = [
+        "section",
+        "metric",
+        "value",
+        "weekStart",
+        "totalSessions",
+        "completedSessions",
+        "uniqueProfiles",
+        "totalVolume",
+        "exerciseKey",
+        "usageCount",
+    ]
+    return rows, columns
+
+
+def _trend_export_rows(
+    payload: Dict[str, Any], *, include_profile: bool
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    rows: List[Dict[str, Any]] = []
+    profile_id = payload.get("profileId") if include_profile else None
+    for entry in payload.get("weeklySeries", []):
+        row = {
+            "section": "weeklySeries",
+            "weekStart": entry.get("weekStart"),
+            "totalSessions": entry.get("totalSessions"),
+            "completedSessions": entry.get("completedSessions"),
+            "totalVolume": entry.get("totalVolume"),
+        }
+        if profile_id:
+            row["profileId"] = profile_id
+        rows.append(row)
+
+    for entry in payload.get("insights", []):
+        rows.append(
+            {
+                "section": "insights",
+                "insightMetric": entry.get("metric"),
+                "direction": entry.get("direction"),
+                "slope": entry.get("slope"),
+                "currentValue": entry.get("currentValue"),
+                "forecastValue": entry.get("forecastValue"),
+                "confidence": entry.get("confidence"),
+                "profileId": profile_id,
+            }
+        )
+
+    columns = [
+        "section",
+        "profileId",
+        "weekStart",
+        "totalSessions",
+        "completedSessions",
+        "totalVolume",
+        "insightMetric",
+        "direction",
+        "slope",
+        "currentValue",
+        "forecastValue",
+        "confidence",
+    ]
+    return rows, columns
+
+
+def _format_csv_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=3004)

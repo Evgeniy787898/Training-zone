@@ -1,0 +1,522 @@
+"""TZONA V2 - AI Advisor microservice."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import sys
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+COMMON_DIR = Path(__file__).resolve().parents[1] / "python_shared"
+if COMMON_DIR.exists() and str(COMMON_DIR) not in sys.path:
+    sys.path.append(str(COMMON_DIR))
+
+from graceful_shutdown import GracefulShutdownManager
+from health import HealthReporter, HealthCheckResult
+from metrics import MetricsMiddleware, MetricsRecorder
+from tracing import TraceMiddleware
+from rate_limit import RateLimitConfig, RateLimitMiddleware, RateLimiter
+from providers import ProviderAPIError, ProviderConfig, ProviderResult, ProviderUsage, create_provider
+
+JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+REQUIRED_ENV_VARS = (
+    "AI_ADVISOR_MODEL",
+    "AI_ADVISOR_PROVIDER",
+)
+
+LOGGER = logging.getLogger("tzona.ai_advisor")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+shutdown_manager = GracefulShutdownManager(service="ai-advisor", logger=LOGGER)
+
+app = FastAPI(title="TZONA AI Advisor", version="1.0.0", lifespan=shutdown_manager.lifespan())
+
+app.add_middleware(TraceMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+rate_limit_config = RateLimitConfig.from_env("AI_ADVISOR")
+rate_limiter = RateLimiter(rate_limit_config)
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=rate_limiter,
+    config=rate_limit_config,
+)
+metrics_recorder = MetricsRecorder(
+    service="ai-advisor",
+    environment=os.getenv("ENVIRONMENT", "unknown"),
+)
+app.add_middleware(MetricsMiddleware, recorder=metrics_recorder)
+
+health_reporter = HealthReporter(service="ai-advisor", version=app.version or "unknown")
+
+
+def _config_health() -> HealthCheckResult:
+    missing = [env for env in REQUIRED_ENV_VARS if not os.getenv(env)]
+    if missing:
+        return HealthCheckResult.degraded(missingEnv=missing)
+    return HealthCheckResult.ok(model=os.getenv("AI_ADVISOR_MODEL"))
+
+
+def _prompt_template_health() -> HealthCheckResult:
+    prompt = os.getenv("AI_ADVISOR_BASE_PROMPT", "").strip()
+    if not prompt:
+        return HealthCheckResult.degraded(reason="base prompt not configured")
+    return HealthCheckResult.ok(promptLength=len(prompt))
+
+
+def _provider_credentials_health() -> HealthCheckResult:
+    provider = os.getenv("AI_ADVISOR_PROVIDER", "").strip().lower() or "openai"
+    env_key = "OPENAI_API_KEY" if provider in {"openai", "gpt"} else "ANTHROPIC_API_KEY"
+    token = os.getenv(env_key, "").strip()
+    if not token:
+        return HealthCheckResult.degraded(provider=provider, missingEnv=[env_key])
+    return HealthCheckResult.ok(provider=provider)
+
+
+def _provider_name() -> str:
+    return os.getenv("AI_ADVISOR_PROVIDER", "openai").strip() or "openai"
+
+
+health_reporter.register("config", _config_health)
+health_reporter.register("promptTemplate", _prompt_template_health)
+health_reporter.register("providerCredentials", _provider_credentials_health)
+
+
+class AdviceContextEntry(BaseModel):
+    exerciseKey: str
+    currentLevel: str
+    advice: str
+    nextSteps: Optional[List[str]] = None
+    tips: Optional[List[str]] = None
+    goals: Optional[List[str]] = None
+    performance: Optional[Dict[str, str]] = None
+    createdAt: Optional[str] = None
+
+
+class PersonalizationProfile(BaseModel):
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    timezone: Optional[str] = None
+    notificationTime: Optional[str] = None
+    preferredLanguage: Optional[str] = None
+
+
+class PersonalizationStats(BaseModel):
+    completionRate30d: Optional[float] = None
+    plannedSessions30d: Optional[int] = None
+    completedSessions30d: Optional[int] = None
+    latestSessionStatus: Optional[str] = None
+    latestSessionDiscipline: Optional[str] = None
+    latestSessionPlannedAt: Optional[str] = None
+
+
+class PersonalizationAchievements(BaseModel):
+    latestTitle: Optional[str] = None
+    latestAwardedAt: Optional[str] = None
+    totalCount: Optional[int] = None
+
+
+class PersonalizationReadiness(BaseModel):
+    avgRpe7d: Optional[float] = None
+
+
+class PersonalizationPayload(BaseModel):
+    profile: Optional[PersonalizationProfile] = None
+    goals: Optional[List[str]] = None
+    equipment: Optional[List[str]] = None
+    focusAreas: Optional[List[str]] = None
+    injuries: Optional[List[str]] = None
+    tone: Optional[str] = None
+    stats: Optional[PersonalizationStats] = None
+    achievements: Optional[PersonalizationAchievements] = None
+    readiness: Optional[PersonalizationReadiness] = None
+
+
+class AdviceRequest(BaseModel):
+    exerciseKey: str
+    currentLevel: str
+    performance: Dict[str, Any]
+    goals: Optional[List[str]] = None
+    context: Optional[List[AdviceContextEntry]] = None
+    personalization: Optional[PersonalizationPayload] = None
+
+
+class AdviceResponse(BaseModel):
+    advice: str
+    nextSteps: List[str]
+    tips: List[str]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AdviceGenerator:
+    """Formats prompts and proxies requests to the configured LLM provider."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+        self._base_prompt = os.getenv("AI_ADVISOR_BASE_PROMPT", "").strip()
+        if not self._base_prompt:
+            raise RuntimeError("AI_ADVISOR_BASE_PROMPT is required for the AI Advisor microservice")
+
+        provider_name = _provider_name()
+        model_name = os.getenv("AI_ADVISOR_MODEL", "").strip()
+        if not model_name:
+            raise RuntimeError("AI_ADVISOR_MODEL must be configured")
+
+        temperature = float(os.getenv("AI_ADVISOR_TEMPERATURE", "0.2"))
+        max_tokens = int(os.getenv("AI_ADVISOR_MAX_TOKENS", "800"))
+        api_key = self._resolve_api_key(provider_name)
+
+        config = ProviderConfig(
+            model=model_name,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            api_key=api_key,
+        )
+        self.provider = create_provider(provider_name, config, logger)
+        self.schema_hint = json.dumps(
+            {
+                "advice": "строка с персональным советом",
+                "nextSteps": ["список конкретных шагов"],
+                "tips": ["дополнительные короткие подсказки"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        self._input_cost_per_1k = self._parse_cost_env("AI_ADVISOR_COST_INPUT_PER_1K_USD")
+        self._output_cost_per_1k = self._parse_cost_env("AI_ADVISOR_COST_OUTPUT_PER_1K_USD")
+
+    def _resolve_api_key(self, provider: str) -> str:
+        env_key = "OPENAI_API_KEY" if provider.strip().lower() in {"openai", "gpt"} else "ANTHROPIC_API_KEY"
+        token = os.getenv(env_key, "").strip()
+        if not token:
+            raise RuntimeError(f"Missing API key for provider '{provider}'. Set {env_key} in the environment.")
+        return token
+
+    async def generate(self, request: AdviceRequest) -> AdviceResponse:
+        user_prompt = self._build_user_prompt(request)
+        started = time.perf_counter()
+        provider_result = await asyncio.to_thread(
+            self.provider.generate,
+            system_prompt=self._base_prompt,
+            user_prompt=user_prompt,
+        )
+        latency_ms = (time.perf_counter() - started) * 1000
+        return self._parse_response(provider_result, request, latency_ms)
+
+    def _build_user_prompt(self, request: AdviceRequest) -> str:
+        payload = {
+            "exerciseKey": request.exerciseKey,
+            "currentLevel": request.currentLevel,
+            "performance": request.performance,
+            "goals": request.goals or [],
+        }
+        context_block = self._format_context(request.context)
+        personalization_block = self._format_personalization(request.personalization)
+        return (
+            "Ты персональный тренер и помогаешь пользователю прогрессировать в упражнениях.\n"
+            "Ответь строго валидным JSON в формате:\n"
+            f"{self.schema_hint}\n\n"
+            f"{context_block}{personalization_block}"
+            "Используй следующие данные:\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n\n"
+            "Дай короткое резюме и 2-3 практичных шага."
+        )
+
+    def _format_context(self, context: Optional[List[AdviceContextEntry]]) -> str:
+        if not context:
+            return ""
+
+        recent_entries = context[-5:]
+        serialized: List[Dict[str, Any]] = []
+        for entry in recent_entries:
+            serialized.append(
+                {
+                    "exerciseKey": entry.exerciseKey,
+                    "currentLevel": entry.currentLevel,
+                    "advice": entry.advice,
+                    "nextSteps": entry.nextSteps or [],
+                    "tips": entry.tips or [],
+                    "goals": entry.goals or [],
+                    "performance": entry.performance or {},
+                    "createdAt": entry.createdAt,
+                }
+            )
+
+        return (
+            "История последних советов (используй для персонализации, не повторяй дословно):\n"
+            f"{json.dumps(serialized, ensure_ascii=False, indent=2)}\n\n"
+        )
+
+    def _format_personalization(self, personalization: Optional[PersonalizationPayload]) -> str:
+        if not personalization:
+            return ""
+        summary: Dict[str, Any] = {}
+        if personalization.profile:
+            profile = personalization.profile.dict(exclude_none=True)
+            if profile:
+                summary["profile"] = profile
+        for key in ("goals", "equipment", "focusAreas", "injuries"):
+            value = getattr(personalization, key, None)
+            if value:
+                summary[key] = value
+        if personalization.tone:
+            summary["tone"] = personalization.tone
+        if personalization.stats:
+            stats = personalization.stats.dict(exclude_none=True)
+            if stats:
+                summary["stats"] = stats
+        if personalization.achievements:
+            achievements = personalization.achievements.dict(exclude_none=True)
+            if achievements:
+                summary["achievements"] = achievements
+        if personalization.readiness:
+            readiness = personalization.readiness.dict(exclude_none=True)
+            if readiness:
+                summary["readiness"] = readiness
+        if not summary:
+            return ""
+        return (
+            "Персональные данные пользователя (учитывай тон и ограничения):\n"
+            f"{json.dumps(summary, ensure_ascii=False, indent=2)}\n\n"
+        )
+
+    def _parse_response(self, provider_result: ProviderResult, request: AdviceRequest, latency_ms: float) -> AdviceResponse:
+        candidate = provider_result.text.strip()
+        match = JSON_BLOCK_RE.search(candidate)
+        if match:
+            candidate = match.group(0)
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            self._logger.warning("Failed to parse AI response", extra={"response": provider_result.text})
+            return self.fallback_response(
+                request,
+                metadata={
+                    "status": "fallback",
+                    "reason": "invalid_response",
+                },
+                latency_ms=latency_ms,
+            )
+
+        advice = str(payload.get("advice", "")).strip()
+        next_steps = self._normalize_list(payload.get("nextSteps"))
+        tips = self._normalize_list(payload.get("tips"))
+
+        if not advice:
+            advice = self._fallback_advice(request)
+        if not next_steps:
+            next_steps = self._default_next_steps(request)
+        if not tips:
+            tips = ["Следите за техникой и фиксируйте прогресс в приложении."]
+
+        metadata = self._build_metadata(
+            status="ok",
+            context_used=bool(request.context),
+            latency_ms=latency_ms,
+            usage=provider_result.usage,
+        )
+        return AdviceResponse(advice=advice, nextSteps=next_steps, tips=tips, metadata=metadata)
+
+    def _normalize_list(self, value: Any) -> List[str]:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return [normalized] if normalized else []
+        if isinstance(value, list):
+            result: List[str] = []
+            for item in value:
+                text = str(item).strip()
+                if text:
+                    result.append(text)
+            return result
+        return []
+
+    def _default_next_steps(self, request: AdviceRequest) -> List[str]:
+        return [
+            f"Удерживайте уровень {request.currentLevel} в упражнении {request.exerciseKey} ещё 1-2 тренировки.",
+            "Добавьте прогресс после стабильных повторений и фиксируйте результат в TZONA.",
+        ]
+
+    def _fallback_advice(self, request: AdviceRequest) -> str:
+        return (
+            f"Продолжайте работать над {request.exerciseKey} на уровне {request.currentLevel}, уделяя внимание контролю "
+            "движения и восстановлению."
+        )
+
+    def fallback_response(
+        self,
+        request: AdviceRequest,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+        latency_ms: Optional[float] = None,
+    ) -> AdviceResponse:
+        extra = metadata.copy() if metadata else {}
+        status = str(extra.get("status")) if extra.get("status") else "fallback"
+        base_metadata = self._build_metadata(
+            status=status,
+            context_used=bool(request.context),
+            latency_ms=latency_ms,
+            usage=None,
+        )
+        base_metadata.update(extra)
+
+        return AdviceResponse(
+            advice=self._fallback_advice(request),
+            nextSteps=self._default_next_steps(request),
+            tips=["Следите за дыханием и делайте разминку."],
+            metadata=base_metadata,
+        )
+
+    def _build_metadata(
+        self,
+        *,
+        status: str,
+        context_used: bool,
+        latency_ms: Optional[float],
+        usage: Optional[ProviderUsage],
+    ) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {
+            "provider": self.provider.name,
+            "status": status,
+            "contextUsed": context_used,
+        }
+        if latency_ms is not None:
+            metadata["latencyMs"] = round(latency_ms, 2)
+        usage_payload = self._usage_metadata(usage)
+        if usage_payload:
+            metadata["usage"] = usage_payload
+            cost_payload = self._estimate_cost(usage)
+            if cost_payload:
+                metadata["cost"] = cost_payload
+        return metadata
+
+    def _usage_metadata(self, usage: Optional[ProviderUsage]) -> Optional[Dict[str, Any]]:
+        if not usage:
+            return None
+        return {
+            "promptTokens": usage.prompt_tokens,
+            "completionTokens": usage.completion_tokens,
+            "totalTokens": usage.total_tokens,
+        }
+
+    def _estimate_cost(self, usage: Optional[ProviderUsage]) -> Optional[Dict[str, float]]:
+        if not usage:
+            return None
+        if self._input_cost_per_1k <= 0 and self._output_cost_per_1k <= 0:
+            return None
+        input_cost = (usage.prompt_tokens / 1000) * self._input_cost_per_1k
+        output_cost = (usage.completion_tokens / 1000) * self._output_cost_per_1k
+        total = input_cost + output_cost
+        return {
+            "inputUsd": round(input_cost, 6),
+            "outputUsd": round(output_cost, 6),
+            "totalUsd": round(total, 6),
+        }
+
+    def _parse_cost_env(self, key: str) -> float:
+        raw = os.getenv(key, "0").strip()
+        try:
+            value = float(raw)
+            return value if value >= 0 else 0.0
+        except ValueError:
+            return 0.0
+
+
+advice_generator = AdviceGenerator(LOGGER)
+
+
+@app.post("/api/generate-advice", response_model=AdviceResponse)
+async def generate_advice(request: AdviceRequest):
+    """Генерация персонального совета для упражнения"""
+    started = time.perf_counter()
+    try:
+        response = await advice_generator.generate(request)
+        metrics_recorder.increment_counter("advices.generated")
+        metrics_recorder.observe_operation(
+            "generate_advice",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            success=True,
+            metadata={
+                "exerciseKey": request.exerciseKey,
+                "currentLevel": request.currentLevel,
+                "provider": advice_generator.provider.name,
+            },
+        )
+        return response
+    except ProviderAPIError as exc:
+        duration_ms = (time.perf_counter() - started) * 1000
+        LOGGER.warning(
+            "ai provider error",
+            extra={
+                "provider": exc.provider,
+                "code": exc.code,
+                "retryable": exc.retryable,
+                "status": exc.status_code,
+            },
+        )
+        metrics_recorder.observe_operation(
+            "generate_advice",
+            duration_ms=duration_ms,
+            success=False,
+            error=exc.code,
+            metadata={
+                "provider": exc.provider,
+                "retryable": exc.retryable,
+            },
+        )
+        return advice_generator.fallback_response(
+            request,
+            metadata={
+                "status": "provider_error",
+                "providerErrorCode": exc.code,
+                "retryable": exc.retryable,
+                "providerStatusCode": exc.status_code,
+            },
+            latency_ms=duration_ms,
+        )
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - started) * 1000
+        metrics_recorder.observe_operation(
+            "generate_advice",
+            duration_ms=duration_ms,
+            success=False,
+            error=str(exc),
+        )
+        raise
+
+
+@app.get("/api/health")
+async def health():
+    return await health_reporter.snapshot()
+
+
+@app.get("/api/metrics")
+async def metrics():
+    return metrics_recorder.snapshot()
+
+
+@shutdown_manager.callback
+def _log_shutdown_metrics() -> None:
+    LOGGER.info("ai-advisor metrics snapshot", extra={"metrics": metrics_recorder.snapshot()})
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=3003)

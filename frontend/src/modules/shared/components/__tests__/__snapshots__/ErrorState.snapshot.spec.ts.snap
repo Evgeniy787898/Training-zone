@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ErrorState snapshots > renders custom content 1`] = `
+"<div data-v-9a804ef3="" class="state state--error" role="alert">
+  <div data-v-9a804ef3="" class="state__icon"><svg data-v-9a804ef3="" width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle data-v-9a804ef3="" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" opacity="0.3"></circle>
+      <path data-v-9a804ef3="" d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+    </svg></div>
+  <p data-v-9a804ef3="" class="state__message">Что-то пошло не так при загрузке достижений</p><button data-v-9a804ef3="" type="button" class="state__action"><span data-v-9a804ef3="" class="state__action-text">Обновить данные</span><svg data-v-9a804ef3="" class="state__action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path data-v-9a804ef3="" d="M1 4v6h6M23 20v-6h-6M3.51 9a9 9 0 0114.85 3.36M20.49 15a9 9 0 01-14.85-3.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg></button>
+</div>"
+`;
+
+exports[`ErrorState snapshots > renders default message and action 1`] = `
+"<div data-v-9a804ef3="" class="state state--error" role="alert">
+  <div data-v-9a804ef3="" class="state__icon"><svg data-v-9a804ef3="" width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle data-v-9a804ef3="" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" opacity="0.3"></circle>
+      <path data-v-9a804ef3="" d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+    </svg></div>
+  <p data-v-9a804ef3="" class="state__message">Произошла ошибка</p><button data-v-9a804ef3="" type="button" class="state__action"><span data-v-9a804ef3="" class="state__action-text">Попробовать ещё раз</span><svg data-v-9a804ef3="" class="state__action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path data-v-9a804ef3="" d="M1 4v6h6M23 20v-6h-6M3.51 9a9 9 0 0114.85 3.36M20.49 15a9 9 0 01-14.85-3.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg></button>
+</div>"
+`;

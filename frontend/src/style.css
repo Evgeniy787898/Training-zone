@@ -1,0 +1,351 @@
+:root {
+    color-scheme: light;
+
+    /* --- GPT Atlas Palette (Light) --- */
+    --color-bg: #ffffff;
+    --color-bg-secondary: #f7f7f8;
+    /* Sidebar/Card bg */
+    --color-bg-elevated: #ffffff;
+    --color-bg-modal: #ffffff;
+
+    /* Text */
+    --color-text-primary: #202123;
+    --color-text-secondary: #6e6e80;
+    --color-text-muted: #acacbe;
+    --color-text-inverse: #ffffff;
+
+    /* Accents */
+    --color-accent: #10a37f;
+    /* ChatGPT Green */
+    --color-accent-hover: #1a7f64;
+    --color-accent-contrast: #ffffff;
+    --color-accent-subtle: rgba(16, 163, 127, 0.1);
+
+    /* Borders & Dividers */
+    --color-border: #e5e5e5;
+    --color-border-subtle: #f0f0f0;
+    --color-border-strong: #d9d9e3;
+
+    /* Functional */
+    --color-danger: #ef4146;
+    --color-warning: #e5a000;
+    --color-success: #10a37f;
+    --color-info: #3c82f6;
+
+    /* Shadows (Soft & Diffused) */
+    --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+    /* Dark Shadow Tokens (for premium cards) */
+    --shadow-dark-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-dark-md: 0 4px 12px rgba(3, 5, 10, 0.35), 0 2px 6px rgba(0, 0, 0, 0.08);
+    --shadow-dark-lg: 0 18px 45px rgba(4, 6, 14, 0.55), 0 8px 24px rgba(4, 6, 14, 0.4);
+    --shadow-dark-xl: 0 25px 50px rgba(15, 23, 42, 0.16);
+
+    /* Overlay Tokens */
+    --overlay-light: rgba(255, 255, 255, 0.05);
+    --overlay-medium: rgba(255, 255, 255, 0.1);
+    --overlay-strong: rgba(255, 255, 255, 0.2);
+
+    /* Text Shadow Tokens */
+    --text-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --text-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.2);
+
+    /* Typography */
+    --font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    --font-size-xs: 0.75rem;
+    --font-size-sm: 0.875rem;
+    --font-size-base: 1rem;
+    --font-size-lg: 1.125rem;
+    --font-size-xl: 1.25rem;
+    --font-size-2xl: 1.5rem;
+    --font-size-3xl: 1.875rem;
+
+    /* Spacing & Radius */
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+    --radius-xl: 1rem;
+    --radius-full: 9999px;
+    /* Spacing Scale */
+    --space-3xs: 0.15rem;
+    /* ~2.4px - micro spacing */
+    --space-2xs: 0.25rem;
+    /* 4px - extra small */
+    --space-xs: 0.5rem;
+    /* 8px - small */
+    --space-sm: 0.75rem;
+    /* 12px - medium-small */
+    --space-md: 1rem;
+    /* 16px - medium (base) */
+    --space-lg: 1.5rem;
+    /* 24px - large */
+    --space-xl: 2rem;
+    /* 32px - extra large */
+    --space-2xl: 3rem;
+    /* 48px - extra extra large */
+
+    /* Animation & Transitions */
+    --duration-fast: 150ms;
+    --duration-base: 200ms;
+    --duration-slow: 300ms;
+    --duration-slower: 500ms;
+
+    --ease-out: cubic-bezier(0, 0, 0.2, 1);
+    --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+    --transition-fast: var(--duration-fast) var(--ease-out);
+    --transition-base: var(--duration-base) var(--ease-out);
+    --transition-slow: var(--duration-slow) var(--ease-out);
+    --transition-slower: var(--duration-slower) var(--ease-in-out);
+
+    /* Chart Colors */
+    --color-chart-primary: #3b82f6;
+    --color-chart-secondary: #8b5cf6;
+    --color-chart-tertiary: #10b981;
+    --color-chart-quaternary: #f59e0b;
+    --color-chart-quinary: #ef4444;
+    --color-chart-senary: #06b6d4;
+
+    /* Layout */
+    --max-width-content: 800px;
+    /* Focused reading width */
+    --header-height: 60px;
+    --nav-bar-height: 64px;
+    --footer-height: 64px;
+}
+
+:root.dark {
+    color-scheme: dark;
+
+    /* --- GPT Atlas Palette (Dark) --- */
+    --color-bg: #343541;
+    /* Old ChatGPT Dark or #202123 */
+    --color-bg-secondary: #202123;
+    /* Sidebar/Card bg */
+    --color-bg-elevated: #2A2B32;
+    --color-bg-modal: #202123;
+
+    /* Text */
+    --color-text-primary: #ececf1;
+    --color-text-secondary: #c5c5d2;
+    --color-text-muted: #8e8ea0;
+    --color-text-inverse: #202123;
+
+    /* Borders */
+    --color-border: #4d4d4f;
+    /* Subtle dark border */
+    --color-border-subtle: #2A2B32;
+    --color-border-strong: #565869;
+
+    /* Shadows (Dark Mode) */
+    --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+}
+
+/* --- Reset & Base --- */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+    font-family: var(--font-family-base);
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+    background-color: var(--color-bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+}
+
+button {
+    font-family: inherit;
+}
+
+/* --- Typography Utilities --- */
+.heading-xl {
+    font-size: var(--font-size-3xl);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+}
+
+.heading-lg {
+    font-size: var(--font-size-2xl);
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+}
+
+.heading-md {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.text-lead {
+    font-size: var(--font-size-lg);
+    color: var(--color-text-secondary);
+}
+
+.text-sm {
+    font-size: var(--font-size-sm);
+}
+
+.text-xs {
+    font-size: var(--font-size-xs);
+}
+
+.text-muted {
+    color: var(--color-text-muted);
+}
+
+/* --- Layout --- */
+#app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.page-shell {
+    max-width: var(--max-width-content);
+    margin: 0 auto;
+    padding: var(--space-lg) var(--space-md);
+    width: 100%;
+}
+
+/* --- Components --- */
+
+/* Buttons - DEPRECATED: Use BaseButton.vue instead */
+/* Kept for backward compatibility during migration */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-xs) var(--space-md);
+    border-radius: var(--radius-md);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+    gap: 0.5rem;
+}
+
+.btn-primary {
+    background-color: var(--color-accent);
+    color: var(--color-accent-contrast);
+}
+
+.btn-primary:hover {
+    background-color: var(--color-accent-hover);
+}
+
+.btn-secondary {
+    background-color: transparent;
+    border-color: var(--color-border);
+    color: var(--color-text-primary);
+}
+
+.btn-secondary:hover {
+    background-color: var(--color-bg-secondary);
+}
+
+.btn-ghost {
+    background-color: transparent;
+    color: var(--color-text-secondary);
+}
+
+.btn-ghost:hover {
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}
+
+/* Cards */
+.surface-card {
+    background-color: var(--color-bg-secondary);
+    /* Slightly distinct from main bg */
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.surface-card:hover {
+    border-color: var(--color-border);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Inputs */
+.input {
+    width: 100%;
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background-color: var(--color-bg);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-base);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+
+/* Utilities */
+.flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.flex-between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.gap-sm {
+    gap: var(--space-sm);
+}
+
+.gap-md {
+    gap: var(--space-md);
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+}

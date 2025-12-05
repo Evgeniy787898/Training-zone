@@ -1,0 +1,1493 @@
+// TZONA V2 - Internal Assistant Engine Service  
+// Ported from V1 internalAssistantEngine.js - FULL VERSION
+import { addDays, format, parseISO, startOfDay } from 'date-fns';
+import { ru } from 'date-fns/locale';
+import { DatabaseService } from '../integrations/supabase.js';
+import { detectIntent } from './nlu.js';
+import { assistantLimits } from '../../config/constants.js';
+import { randomChoice } from '../../utils/random.js';
+import { shortenText } from '../../utils/text.js';
+
+const RAW_INTENT_MAP: Record<string, string> = {
+    'plan.today': 'plan_today',
+    'plan.week': 'plan_week',
+    'plan.setup': 'plan_setup',
+    'report.start': 'report_start',
+    'stats.show': 'stats_show',
+    'settings.open': 'settings_open',
+    'schedule.reschedule': 'schedule_reschedule',
+    'recovery.mode': 'recovery_mode',
+    'remind.later': 'remind_later',
+    'motivation': 'motivation',
+    'help': 'help',
+    'note.save': 'note_save',
+    'triggers.help': 'triggers_help',
+};
+
+const TRAINER_INTENTS = new Set([
+    'plan_today',
+    'plan_week',
+    'plan_setup',
+    'report_start',
+    'stats_show',
+    'settings_open',
+    'schedule_reschedule',
+    'recovery_mode',
+    'remind_later',
+    'motivation',
+    'help',
+]);
+
+const GREETING_REGEX = /(привет|доброе|здравств|hi|hello)/i;
+const GRATITUDE_REGEX = /(спасибо|благодар)/i;
+const FATIGUE_REGEX = /(слаб|устал|болит|не тяну|тяжел|жестко|жёстко)/i;
+const EASY_REGEX = /(легко|даже не вспот|слишком просто|хочу сложнее)/i;
+const NOTE_TAG_REGEX = /#([\p{L}\d_]+)/gu;
+const NOTE_COMMAND_REGEXES = [
+    /сохран(?:и|ить)\s*(?:эту\s+)?(?:заметку|мысль|идею)?[-:]?\s*([\s\S]+)/i,
+    /заметк[аи]?\s*[-:]\s*([\s\S]+)/i,
+    /запиши\s*(?:что|это|в\s*заметки)?[-:]?\s*([\s\S]+)/i,
+];
+const CHAT_STATE_KEY = 'ai_chat_history';
+const NOTE_PREVIEW_LIMIT = assistantLimits.notePreviewChars;
+
+// Global db instance - will be initialized
+let db: DatabaseService;
+
+export function initializeDb(databaseService: DatabaseService) {
+    db = databaseService;
+}
+
+type AssistantPlanSnapshot = {
+    sessions: any[];
+    source: 'database';
+    refreshedAt: string;
+};
+
+function coerceDecimal(value: any): number | null {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (typeof value === 'object' && typeof value.toString === 'function') {
+        const parsed = Number(value.toString());
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+
+function toIsoString(value: any): string | null {
+    if (!value) {
+        return null;
+    }
+    if (typeof value === 'string') {
+        return value;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+    return date.toISOString();
+}
+
+function normalizePlanSession(session: any): any {
+    const exercises = Array.isArray(session?.exercises) ? session.exercises : [];
+    const legacyExercises = Array.isArray(session?.legacyExercises) ? session.legacyExercises : [];
+    const payload = typeof session?.exercisePayload === 'object' && session.exercisePayload !== null
+        ? session.exercisePayload
+        : null;
+
+    const warmup = Array.isArray((session as any)?.warmup)
+        ? (session as any).warmup
+        : Array.isArray((payload as any)?.warmup)
+            ? (payload as any).warmup
+            : [];
+
+    const cooldown = Array.isArray((session as any)?.cooldown)
+        ? (session as any).cooldown
+        : Array.isArray((payload as any)?.cooldown)
+            ? (payload as any).cooldown
+            : [];
+
+    const plannedAt = toIsoString(session?.date ?? session?.plannedAt);
+
+    return {
+        ...session,
+        date: plannedAt,
+        plannedAt,
+        sessionType: session?.sessionType ?? session?.session_type ?? null,
+        session_type: session?.session_type ?? session?.sessionType ?? null,
+        focus: session?.focus ?? session?.sessionType ?? session?.session_type ?? null,
+        warmup,
+        cooldown,
+        notes: session?.notes ?? session?.comment ?? null,
+        rpe: coerceDecimal(session?.rpe),
+        exercises,
+        legacyExercises,
+    };
+}
+
+function sessionTimestamp(value: any): number {
+    if (!value) {
+        return Number.POSITIVE_INFINITY;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    const timestamp = date.getTime();
+    return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp;
+}
+
+async function fetchAssistantPlan(profileId: string, referenceDate: Date, windowDays = 7): Promise<AssistantPlanSnapshot | null> {
+    if (!db) {
+        throw new Error('Database service is not initialized.');
+    }
+
+    const start = startOfDay(referenceDate);
+    const end = addDays(start, Math.max(0, windowDays - 1));
+    const filters = {
+        startDate: format(start, 'yyyy-MM-dd'),
+        endDate: format(end, 'yyyy-MM-dd'),
+    };
+
+    const sessions = await db.getTrainingSessions(profileId, filters);
+    const normalizedSessions = sessions
+        .map(normalizePlanSession)
+        .sort((a, b) => sessionTimestamp(a?.date) - sessionTimestamp(b?.date));
+
+    if (!normalizedSessions.length) {
+        return null;
+    }
+
+    return {
+        sessions: normalizedSessions,
+        source: 'database',
+        refreshedAt: new Date().toISOString(),
+    };
+}
+
+function toInternalIntent(rawIntent: string | undefined): string {
+    if (!rawIntent) {
+        return 'unknown';
+    }
+    return RAW_INTENT_MAP[rawIntent] || rawIntent.replace('.', '_') || 'unknown';
+}
+
+function extractNoteTags(content: string): string[] {
+    if (!content) {
+        return [];
+    }
+    return Array.from(content.matchAll(NOTE_TAG_REGEX)).map(match => match[1].toLowerCase());
+}
+
+function parseNoteCommand(text: string): any {
+    if (!text) {
+        return null;
+    }
+
+    const normalized = text.trim();
+
+    for (const pattern of NOTE_COMMAND_REGEXES) {
+        const match = normalized.match(pattern);
+        if (match && match[1]) {
+            const rawContent = match[1].trim();
+            if (!rawContent) {
+                return { content: '' };
+            }
+
+            const tags = extractNoteTags(rawContent);
+            const content = rawContent;
+            const preview = shortenText(content, NOTE_PREVIEW_LIMIT);
+            const sentence = content.split(/[\r\n]+/u)[0]
+                .split(/[.!?]/u)[0]
+                .trim();
+
+            return {
+                content,
+                tags,
+                preview,
+                title: sentence ? shortenText(sentence, 60) : 'Заметка',
+            };
+        }
+    }
+
+    return null;
+}
+
+function formatRelativeTimeLabel(dateInput: string | Date | null | undefined): string | null {
+    if (!dateInput) {
+        return null;
+    }
+
+    const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    const now = Date.now();
+    const diffMs = Math.max(0, now - date.getTime());
+    const diffMinutes = Math.floor(diffMs / 60000);
+
+    if (diffMinutes < 1) {
+        return 'только что';
+    }
+    if (diffMinutes < 60) {
+        return `${diffMinutes} мин назад`;
+    }
+
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) {
+        return `${diffHours} ч назад`;
+    }
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) {
+        return `${diffDays} дн назад`;
+    }
+
+    return format(date, 'd MMMM', { locale: ru });
+}
+
+function renderTemplate(template: string | null | undefined, data: Record<string, any> = {}): string {
+    if (!template) {
+        return '';
+    }
+    return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+        const value = data[key];
+        return value !== undefined && value !== null ? String(value) : '';
+    });
+}
+
+async function pickTemplate(category: string, tags: string[] = []): Promise<any | null> {
+    if (!db) {
+        return null;
+    }
+    const candidates = Array.isArray(tags) && tags.length ? tags : [null];
+
+    for (const tag of candidates) {
+        const templates = await db.getAiTemplates(category, { tag, limit: 30 });
+        if (templates.length > 0) {
+            return randomChoice(templates);
+        }
+    }
+
+    const templates = await db.getAiTemplates(category, { limit: 30 });
+    return randomChoice(templates);
+}
+
+function buildUpcomingSession(plan: any, referenceDate: Date = new Date()): any {
+    if (!plan || !Array.isArray(plan.sessions)) {
+        return null;
+    }
+    const today = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+    const sessions = plan.sessions
+        .map((session: any) => {
+            const date = session.date ? parseISO(session.date) : null;
+            return { ...session, date };
+        })
+        .filter((session: any) => session.date)
+        .sort((a: any, b: any) => a.date.getTime() - b.date.getTime());
+
+    const upcoming = sessions.find((session: any) =>
+        session.date >= new Date(today.toDateString())
+    );
+    return upcoming || sessions[0] || null;
+}
+
+async function loadContext(profile: any): Promise<any> {
+    if (!profile?.id) {
+        return {
+            completion: null,
+            latestSession: null,
+            plan: null,
+            adherence: null,
+        };
+    }
+
+    if (!db) {
+        return {
+            completion: null,
+            latestSession: null,
+            plan: null,
+            adherence: null,
+            recentNotes: [],
+        };
+    }
+
+    const referenceDate = new Date();
+    const [completion, latestSession, adherenceSummary, recentNotes, plan] = await Promise.all([
+        db.getRecentCompletionStats(profile.id, { days: 14 }).catch((error) => {
+            console.error('Failed to load completion stats:', error);
+            return null;
+        }),
+        db.getLatestSessionSummary(profile.id).catch((error) => {
+            console.error('Failed to load latest session:', error);
+            return null;
+        }),
+        db.getAdherenceSummary(profile.id).catch((error) => {
+            console.error('Failed to load adherence summary:', error);
+            return null;
+        }),
+        db.getRecentAssistantNotes(profile.id, { limit: 3 }).catch((error) => {
+            console.warn('Failed to load assistant notes:', error?.message || error);
+            return [];
+        }),
+        fetchAssistantPlan(profile.id, referenceDate).catch((error) => {
+            console.error('Failed to load assistant plan:', error);
+            return null;
+        }),
+    ]);
+
+    return {
+        completion,
+        latestSession,
+        adherence: adherenceSummary,
+        plan,
+        recentNotes: Array.isArray(recentNotes) ? recentNotes : [],
+    };
+}
+
+function appendMetadata(template: any, renderedText: string): string {
+    if (!template?.metadata) {
+        return renderedText;
+    }
+
+    const extra: string[] = [];
+    if (template.metadata.cta) {
+        extra.push(`➡️ ${template.metadata.cta}`);
+    }
+    if (template.metadata.reminder) {
+        extra.push(template.metadata.reminder);
+    }
+
+    if (extra.length === 0) {
+        return renderedText;
+    }
+
+    return `${renderedText}\n\n${extra.join('\n')}`;
+}
+
+async function buildGreeting({ profile, context }: { profile?: any; context: any }): Promise<string> {
+    const tags: string[] = [];
+    const stats = context.completion || {};
+    const completionRate = stats.total ? Math.round((stats.completed / stats.total) * 100) : null;
+
+    if (profile?.flags?.recovery_mode) {
+        tags.push('recovery');
+    } else if (stats.lastStatus === 'done' || stats.lastStatus === 'completed') {
+        tags.push('celebration');
+    } else if (stats.streak >= 4) {
+        tags.push('celebration');
+    } else if (stats.lastStatus === 'skipped' || stats.lastStatus === 'missed') {
+        tags.push('motivation');
+    } else if (completionRate !== null && completionRate < 50) {
+        tags.push('motivation');
+    } else {
+        tags.push('motivation');
+    }
+
+    const template = await pickTemplate('greeting', tags);
+    const base = template
+        ? appendMetadata(
+            template,
+            renderTemplate(template.body, {
+                current_streak: stats.streak || 0,
+                completion_rate: completionRate ?? 0,
+            })
+        )
+        : 'Привет! Готов продолжать тренировки — расскажи, что планируешь сегодня?';
+
+    const dynamicLines: string[] = [];
+    if (stats.streak >= 3) {
+        dynamicLines.push(`🔥 Серия держится уже ${stats.streak} дней — отличный ритм.`);
+    }
+    if (completionRate !== null) {
+        if (completionRate >= 90) {
+            dynamicLines.push('👍 Последние тренировки отработаны почти без пропусков.');
+        } else if (completionRate < 50) {
+            dynamicLines.push('🤝 Давай вернёмся в ритм — начнём с короткой сессии, чтобы разблокировать привычку.');
+        }
+    }
+    if (!dynamicLines.length && context.latestSession?.status === 'done') {
+        dynamicLines.push('✅ Вчерашнюю тренировку отметил, можно переходить к следующему шагу.');
+    }
+
+    return dynamicLines.length
+        ? `${base}\n\n${dynamicLines.join('\n')}`
+        : base;
+}
+
+async function buildMotivation({ context }: { context: any }): Promise<string> {
+    const stats = context.completion || {};
+    const tags: string[] = [];
+
+    if (stats.streak >= 3) {
+        tags.push('streak');
+    }
+    if ((stats.total && stats.completed / stats.total < 0.4) || stats.skipped >= 2) {
+        tags.push('adherence_low');
+    }
+    if (!tags.length) {
+        tags.push('comeback');
+    }
+
+    const template = await pickTemplate('motivation', tags);
+    if (!template) {
+        return 'Продолжай в выбранном темпе — даже маленький шаг сегодня поддержит большой прогресс завтра.';
+    }
+
+    const data = {
+        current_streak: stats.streak || 0,
+    };
+
+    const rendered = renderTemplate(template.body, data);
+    const note = Array.isArray(context.recentNotes) ? context.recentNotes[0] : null;
+
+    if (note?.content) {
+        const relative = formatRelativeTimeLabel(note.created_at);
+        const preview = shortenText(note.content, 70);
+        const noteLine = `🗒️ Последняя заметка${relative ? ` (${relative})` : ''}: «${preview}».`;
+        return appendMetadata(template, `${rendered}\n\n${noteLine}`);
+    }
+
+    return appendMetadata(template, rendered);
+}
+
+async function buildPlanToday({ profile, context }: { profile?: any; context: any }): Promise<string> {
+    const plan = context.plan;
+    if (!plan || !Array.isArray(plan.sessions) || !plan.sessions.length) {
+        return 'Не нашёл актуальный план тренировок. Открой раздел «Программы», чтобы выбрать или обновить цикл.';
+    }
+    const upcoming = buildUpcomingSession(plan);
+
+    const tags: string[] = [];
+    if (upcoming) {
+        tags.push('upcoming_session');
+    } else {
+        tags.push('rest_day');
+    }
+
+    const template = await pickTemplate('plan_hint', tags);
+    if (!template) {
+        if (upcoming) {
+            const focus = upcoming.focus || upcoming.session_type;
+            const dateLabel = upcoming.date ? format(upcoming.date, 'd MMMM', { locale: ru }) : 'скоро';
+            return `Следующая тренировка ${dateLabel} — ${focus} (держим RPE около ${upcoming.rpe || 7}).`;
+        }
+        return 'Сегодня день восстановления. Добавь лёгкую мобилизацию или прогулку.';
+    }
+
+    const data: Record<string, any> = {};
+    if (upcoming) {
+        data.weekday = upcoming.date
+            ? format(upcoming.date, 'EEEE', { locale: ru })
+            : '';
+        data.date_label = upcoming.date
+            ? format(upcoming.date, 'd MMMM', { locale: ru })
+            : '';
+        data.focus = upcoming.focus || upcoming.session_type || 'Рабочая сессия';
+        data.target_rpe = upcoming.rpe || 7;
+    }
+
+    const rendered = renderTemplate(template.body, data);
+    const note = Array.isArray(context.recentNotes) ? context.recentNotes[0] : null;
+    if (note?.content) {
+        const relative = formatRelativeTimeLabel(note.created_at);
+        const preview = shortenText(note.content, 70);
+        const noteLine = `🗒️ Помню заметку${relative ? ` (${relative})` : ''}: «${preview}». Используй её, чтобы зафиксировать действие.`;
+        return appendMetadata(template, `${rendered}\n\n${noteLine}`);
+    }
+    return appendMetadata(template, rendered);
+}
+
+async function buildWeekPlan({ context }: { context: any }): Promise<string> {
+    const plan = context.plan;
+    const sessions = Array.isArray(plan?.sessions) ? plan.sessions : [];
+
+    const summaryLines = sessions.slice(0, 5).map((session: any) => {
+        const date = session.date ? parseISO(session.date) : null;
+        const label = date ? format(date, 'd MMM (EEEE)', { locale: ru }) : session.date;
+        const focus = session.focus || session.session_type || 'Рабочая сессия';
+        return `• ${label}: ${focus}`;
+    });
+
+    if (sessions.length > 5) {
+        summaryLines.push(`… и ещё ${sessions.length - 5} сессий`);
+    }
+
+    if (!summaryLines.length) {
+        return 'Нет запланированных тренировок на этой неделе. Используй раздел «Программы», чтобы добавить новую сессию.';
+    }
+
+    const adherence = context.adherence?.adherence_percent;
+    const adherenceLine = typeof adherence === 'number'
+        ? `Регулярность за месяц: ${Math.round(adherence)}%.`
+        : null;
+
+    return [
+        '📆 План на неделю готов. Вот основные акценты:',
+        '',
+        ...summaryLines,
+        '',
+        adherenceLine,
+        'Перейди в WebApp, чтобы отметить выполненные блоки или скорректировать нагрузку.',
+    ].filter(Boolean).join('\n');
+}
+
+async function buildNoteSaveReply({ profile, message, context, slots = {} }: {
+    profile?: any;
+    message?: string;
+    context: any;
+    slots?: any;
+}): Promise<string> {
+    if (!profile?.id) {
+        return 'Чтобы сохранять заметки, нужно авторизоваться через бот и WebApp.';
+    }
+
+    if (!db) {
+        return 'База данных не инициализирована.';
+    }
+
+    const parsed = slots?.note?.content ? slots.note : parseNoteCommand(message || '');
+
+    if (!parsed?.content || !parsed.content.trim()) {
+        return 'Сформулируй заметку после ключевого слова, например: «Сохрани: разгрузочная неделя с 5 по 11 мая» или «Заметка: добавить растяжку коленей».';
+    }
+
+    let note = null;
+    try {
+        note = await db.saveAssistantNote(profile.id, {
+            title: parsed.title,
+            content: parsed.content,
+            tags: parsed.tags || [],
+            metadata: {
+                source: 'chat',
+                source_message: message,
+                detected_tags: parsed.tags || [],
+            },
+        });
+    } catch (error) {
+        console.error('Failed to save assistant note:', error);
+        return 'Не удалось сохранить заметку. Попробуй переформулировать или повторить позже.';
+    }
+
+    try {
+        await db.mergeDialogState(profile.id, CHAT_STATE_KEY, (payload: any) => ({
+            ...payload,
+            notes_saved: (payload?.notes_saved || 0) + 1,
+            last_saved_note_id: note.id,
+            last_saved_note_at: note.createdAt,
+            last_note_preview: parsed.preview,
+            session_status: 'active',
+        }));
+    } catch (error) {
+        console.error('Failed to update dialog state after note save:', error);
+    }
+
+    try {
+        await db.logEvent(profile.id, 'assistant_note_saved', 'info', {
+            note_id: note.id,
+            tags: parsed.tags || [],
+            preview: parsed.preview,
+        });
+    } catch (error) {
+        console.error('Failed to log note save event:', error);
+    }
+
+    const acknowledgementOptions = [
+        `🗒️ Зафиксировал: «${parsed.preview}».`,
+        `📌 Записал в журнал: «${parsed.preview}».`,
+        `✅ Заметка сохранена: «${parsed.preview}».`,
+    ];
+
+    const tagsLine = parsed.tags?.length
+        ? `Теги: ${parsed.tags.map((tag: string) => `#${tag}`).join(' ')}`
+        : null;
+
+    const totalNotes = Array.isArray(context?.recentNotes)
+        ? context.recentNotes.length + 1
+        : null;
+
+    const progressLine = totalNotes
+        ? `Теперь в журнале ${totalNotes} замет${totalNotes === 1 ? 'ка' : totalNotes < 5 ? 'ки' : 'ок'} — можно вернуться к ним в любое время.`
+        : null;
+
+    const followUps = [
+        'Чтобы позже найти заметки, загляни в WebApp или попроси меня напомнить.',
+        'Можешь помечать заметки хэштегами (#восстановление, #идея) — так легче их группировать.',
+        'Если нужно превратить заметку в задачу — добавь «напомни» с временем в следующем сообщении.',
+    ];
+
+    return [
+        randomChoice(acknowledgementOptions) || '🗒️ Заметку сохранил.',
+        tagsLine,
+        progressLine,
+        randomChoice(followUps),
+    ].filter(Boolean).join('\n\n');
+}
+
+function buildTriggersHelpReply(): string {
+    const introVariants = [
+        'Вот короткая шпаргалка по командам и триггерам:',
+        'Рассказываю, что можно попросить и как сформулировать:',
+        'Держи подборку команд, на которые я реагирую мгновенно:',
+    ];
+
+    const triggerCatalog = [
+        { label: 'План на день', description: 'узнать ближайшую тренировку', example: 'Что по плану сегодня?' },
+        { label: 'План на неделю', description: 'показать расписание', example: 'Собери план на неделю с акцентом на кор.' },
+        { label: 'Отчёт', description: 'зафиксировать выполненную тренировку', example: 'Готов отчитаться за понедельник.' },
+        { label: 'Мотивация', description: 'получить поддерживающее сообщение', example: 'Нужна мотивация, сорвался с графика.' },
+        { label: 'Напоминание', description: 'поставить сигнал', example: 'Напомни через 30 минут потянуться.' },
+        { label: 'Сохрани', description: 'создать заметку в журнале', example: 'Сохрани: растяжка бедра вечером и лёд на колено.' },
+    ];
+
+    const lines = triggerCatalog.map(item => `• ${item.label} — ${item.description}. Пример: «${item.example}».`);
+
+    const outroVariants = [
+        'Можешь комбинировать команды: например, «Сохрани заметку и напомни вечером».',
+        'Если не уверен в формулировке — просто опиши задачу, я уточню детали.',
+    ];
+
+    return [
+        randomChoice(introVariants) || 'Вот подсказки по триггерам:',
+        '',
+        ...lines,
+        '',
+        randomChoice(outroVariants) || 'Если появятся новые идеи — просто напиши, разберёмся.',
+    ].join('\n');
+}
+
+async function buildFallback({ message }: { message?: string }): Promise<string> {
+    const clean = message ? shortenText(message, 140) : null;
+    const variants = [
+        (text: string | null) => text
+            ? `Понял, о чём речь: «${text}». Скажи, нужна ли помощь с планом, отчётом, заметкой или восстановлением — так смогу ответить точнее.`
+            : 'Готов подключиться: подскажи, нужен план, отчёт, заметка или восстановление?'
+        ,
+        (text: string | null) => {
+            const intro = text ? `Вопрос «${text}» широкий.` : 'Хочу убедиться, что понял задачу.';
+            return `${intro} Выбери направление: тренировка, прогрессия, напоминание или сохранение заметки.`;
+        },
+        (text: string | null) => {
+            const intro = text ? `Давайте уточним запрос «${text}».` : 'Чтобы продолжить, мне нужна конкретика.';
+            return `${intro} Например: «План на завтра», «Сохрани: цель на неделю», «Напомни в 19:00 растяжку».`;
+        },
+    ];
+
+    const hint = 'Если не определился, напиши «справка по триггерам» — подскажу все быстрые команды.';
+
+    return [
+        randomChoice(variants)?.(clean) || 'Подскажи, нужна ли помощь с планом, отчётом, заметкой или восстановлением — и я разложу по шагам.',
+        hint,
+    ].filter(Boolean).join('\n\n');
+}
+
+function composeTrainerMessage({ intro, goal, warmup, main, cooldown, nextStep, extra }: {
+    intro?: string;
+    goal?: string;
+    warmup?: string;
+    main?: string;
+    cooldown?: string;
+    nextStep?: string;
+    extra?: string;
+}): string {
+    const lines: string[] = [];
+    if (intro) {
+        lines.push(intro);
+    }
+    if (goal) {
+        lines.push(`**Цель:** ${goal}`);
+    }
+    if (warmup) {
+        lines.push(`**Разминка:** ${warmup}`);
+    }
+    if (main) {
+        lines.push(`**Основная часть:** ${main}`);
+    }
+    if (cooldown) {
+        lines.push(`**Заминка:** ${cooldown}`);
+    }
+    if (nextStep) {
+        lines.push(`**Следующий шаг:** ${nextStep}`);
+    }
+    if (extra) {
+        lines.push(extra);
+    }
+    return lines.join('\n');
+}
+
+function formatExerciseLine(exercise: any): string | null {
+    if (!exercise) {
+        return null;
+    }
+    const name = exercise.name || exercise.exercise_key || 'Упражнение';
+    const sets = exercise.sets ?? exercise.target?.sets;
+    const reps = exercise.reps ?? exercise.target?.reps;
+    const volume = sets && reps ? `${sets}×${reps}` : null;
+    const cue = exercise.notes || exercise.cue || null;
+    return [name, volume, cue].filter(Boolean).join(' — ');
+}
+
+function formatWarmup(session: any): string {
+    if (Array.isArray(session?.warmup) && session.warmup.length) {
+        return session.warmup.join('; ');
+    }
+    return '5 минут динамической мобилизации: плечи, таз, лёгкое кардио.';
+}
+
+function formatCooldown(session: any): string {
+    if (Array.isArray(session?.cooldown) && session.cooldown.length) {
+        return session.cooldown.join('; ');
+    }
+    return 'Дыхание 4-6-4 и растяжка грудного отдела, 3 минуты на расслабление.';
+}
+
+async function buildTrainerPlanToday({ profile, context }: { profile?: any; context: any }): Promise<string> {
+    const plan = context.plan;
+    if (!plan || !Array.isArray(plan.sessions) || !plan.sessions.length) {
+        return 'Пока нет данных по плану тренировок. Запусти планирование в разделе «Программы», чтобы продолжить.';
+    }
+    const upcoming = buildUpcomingSession(plan);
+    const stats = context.completion || {};
+
+    if (!upcoming) {
+        return composeTrainerMessage({
+            intro: 'Сегодня в цикле день восстановления.',
+            goal: 'Провести качественное восстановление и подготовиться к следующей сессии.',
+            warmup: '10 минут лёгкой прогулки или кардио дома.',
+            main: 'Мобилизация позвоночника, дыхательная практика, мягкое растяжение ног и плеч.',
+            cooldown: 'Контроль дыхания и запись ощущений в заметки.',
+            nextStep: 'Отметь восстановительный день в WebApp, чтобы план учёл паузу.',
+        });
+    }
+
+    const dateLabel = upcoming.date
+        ? format(upcoming.date, 'd MMMM (EEEE)', { locale: ru })
+        : 'сегодня';
+    const focus = upcoming.focus || upcoming.session_type || 'Рабочая сессия';
+    const goalLine = stats.streak >= 3
+        ? 'Сохранить серию и удержать технику на уровне.'
+        : stats.lastStatus === 'skipped'
+            ? 'Вернуться в ритм через управляемую нагрузку.'
+            : 'Отработать ключевые движения и зафиксировать ощущения.';
+
+    const mainBlock = (upcoming.exercises || [])
+        .slice(0, 3)
+        .map(formatExerciseLine)
+        .filter(Boolean)
+        .join('; ')
+        || '3 круга: подтягивания, отжимания, планка — держим технику и дыхание.';
+
+    return composeTrainerMessage({
+        intro: `📋 План на ${dateLabel}: фокус — ${focus}, держим RPE около ${upcoming.rpe || 7}.`,
+        goal: goalLine,
+        warmup: formatWarmup(upcoming),
+        main: mainBlock,
+        cooldown: formatCooldown(upcoming),
+        nextStep: 'После тренировки отметь результат и RPE, чтобы обновить прогрессию.',
+        extra: upcoming.notes || null,
+    });
+}
+
+async function buildTrainerPlanWeek({ profile, context }: { profile?: any; context: any }): Promise<string> {
+    const plan = context.plan;
+    const sessions = Array.isArray(plan?.sessions) ? plan.sessions : [];
+
+    if (!sessions.length) {
+        return 'Не нашёл активных сессий. Скажи «Собери план», и я предложу базовый микроцикл.';
+    }
+
+    const lines = sessions.map((session: any) => {
+        const date = session.date ? parseISO(session.date) : null;
+        const label = date ? format(date, 'd MMMM (EEEE)', { locale: ru }) : session.date;
+        const focus = session.focus || session.session_type || 'Рабочая сессия';
+        return `• ${label}: ${focus}, RPE ≈ ${session.rpe || 7}`;
+    });
+
+    return [
+        '📆 План на неделю готов. Раскладываю по дням:',
+        ...lines,
+        '',
+        'Следи за ощущениями: при усталости можно сдвинуть тренировку или попросить облегчённую версию.',
+        'Отмечай выполнение в WebApp — по данным обновлю прогрессии.',
+    ].join('\n');
+}
+
+function buildReportKickoffReply(): string {
+    return [
+        '📝 Готов принять отчёт о тренировке.',
+        '**Цель:** Зафиксировать объём, RPE и самочувствие, чтобы адаптировать план.',
+        '**Разминка:** Расскажи, нужна ли была адаптация перед основным блоком.',
+        '**Основная часть:** Перечисли упражнения с подходами и повторами, добавь ощущения.',
+        '**Заминка:** Сообщи про восстановление: растяжка, сон, питание.',
+        '**Следующий шаг:** После отчёта предложу рекомендации и обновлю план в WebApp.',
+    ].join('\n');
+}
+
+function buildRescheduleReply({ slots }: { slots?: any }): string {
+    const shift = slots?.preferredShiftDays;
+    const preferredDay = slots?.preferredDay;
+    const lines = ['🔄 Перенесу тренировку.'];
+
+    if (shift) {
+        lines.push(`Смещаем на ${shift === 1 ? 'завтра' : `+${shift} дней`}.`);
+    }
+    if (preferredDay) {
+        lines.push(`Учту пожелание тренироваться в день: ${preferredDay}.`);
+    }
+
+    lines.push('Если нужно точное время или диапазон — напиши, уточню перед переносом.');
+    return lines.join(' ');
+}
+
+function buildReminderReply({ slots, needsClarification }: { slots?: any; needsClarification?: boolean }): string {
+    if (needsClarification || !slots?.reminder) {
+        return 'Чтобы поставить напоминание, назови время: «через 30 минут» или «в 19:30».';
+    }
+
+    const { unit, value, hours, minutes } = slots.reminder;
+    let when: string | null = null;
+    if (unit === 'hours' || unit === 'minutes') {
+        const suffix = unit === 'hours' ? 'час' : 'минут';
+        when = `через ${value} ${suffix}`;
+    } else if (unit === 'clock') {
+        const hh = String(hours).padStart(2, '0');
+        const mm = String(minutes).padStart(2, '0');
+        when = `в ${hh}:${mm}`;
+    }
+    return when
+        ? `⏰ Напоминание поставлено ${when}. Сообщу, когда придёт время.`
+        : 'Готов поставить напоминание — уточни время, чтобы не промахнуться.';
+}
+
+function buildSettingsReply(): string {
+    return [
+        '⚙️ Настройки доступны в WebApp.',
+        'Могу обновить время уведомлений, включить паузу или изменить частоту тренировок — просто напиши параметры.',
+        'Командой «Открой приложение» пришлю кнопку для перехода.',
+    ].join('\n');
+}
+
+async function buildStatsReply({ profile, context }: { profile?: any; context: any }): Promise<string> {
+    const stats = context.completion || {};
+    const adherence = context.adherence;
+    const latest = context.latestSession;
+
+    const lines = ['📊 Краткий отчёт по прогрессу:'];
+
+    if (typeof adherence?.adherence_percent === 'number') {
+        lines.push(`• Регулярность за 4 недели: ${Math.round(adherence.adherence_percent)}%.`);
+    }
+    if (typeof stats.streak === 'number' && stats.streak > 0) {
+        lines.push(`• Серия выполненных тренировок: ${stats.streak}.`);
+    }
+    if (latest?.date) {
+        const dateLabel = format(new Date(latest.date), 'd MMMM', { locale: ru });
+        const statusMap: Record<string, string> = {
+            done: 'выполнена',
+            completed: 'выполнена',
+            skipped: 'пропущена',
+            missed: 'пропущена',
+        };
+        const status = statusMap[latest.status] || latest.status || 'зафиксирована';
+        lines.push(`• Последняя тренировка ${dateLabel}: ${status}, RPE ${latest.rpe ?? '—'}.`);
+    }
+    if (profile?.goals?.description) {
+        lines.push(`• Текущий фокус: ${profile.goals.description}.`);
+    }
+
+    lines.push('Если нужна детализация по упражнениям или прогрессиям — скажи, подготовлю отчёт.');
+    return lines.join('\n');
+}
+
+function buildRecoveryReply({ notesFlag }: { notesFlag?: string }): string {
+    const lines = [
+        '🩺 Переключаемся в режим восстановления.',
+        '**Цель:** Снизить нагрузку и помочь телу восстановиться.',
+        '**Разминка:** Дыхательные практики и лёгкая мобилизация суставов.',
+        '**Основная часть:** Прогулка 20 минут или мягкий комплекс с растяжкой.',
+        '**Заминка:** Сон + гидратация, фиксируем самочувствие.',
+        '**Следующий шаг:** Сообщи, когда будешь готов вернуться к рабочему циклу.',
+    ];
+    if (notesFlag === 'injury') {
+        lines.push('⚠️ Если дискомфорт не проходит, стоит проконсультироваться с врачом и скорректировать план.');
+    }
+    return lines.join('\n');
+}
+
+function buildHelpReply(): string {
+    return [
+        '🤝 Вот чем я могу помочь прямо в чате:',
+        '• Составить план на день или неделю и адаптировать его под цели.',
+        '• Принять отчёт, оценить RPE и предложить следующий шаг.',
+        '• Напомнить о тренировке и поделиться статистикой.',
+        '• Подсказать упражнения для восстановления или прогрессии.',
+        '• Открыть WebApp, чтобы отредактировать настройки.',
+        'С чего начнём?',
+    ].join('\n');
+}
+
+function buildPlanSetupReply(): string {
+    return [
+        '🔧 Обновим план под текущие цели.',
+        'Расскажи, что изменилось: частота тренировок, доступное оборудование, целевой акцент.',
+        'После этого соберу новую версию плана и синхронизирую её в WebApp.',
+    ].join('\n');
+}
+
+function buildGenericTrainerFallback(profile: any): string {
+    const frequency = profile?.preferences?.training_frequency
+        || profile?.training_frequency
+        || profile?.profile?.preferences?.training_frequency
+        || 4;
+    const goal = profile?.goals?.description
+        || profile?.preferences?.training_goal
+        || profile?.profile?.goals?.description
+        || 'укрепить базовые движения';
+
+    return composeTrainerMessage({
+        intro: 'Продолжаем держать курс на прогресс.',
+        goal: `Работаем над целью: ${goal}.`,
+        warmup: '5 минут динамической разминки, чтобы подготовить тело.',
+        main: `Фокус на ${frequency} сессий в неделю — готов скорректировать при необходимости.`,
+        cooldown: 'Отмечай ощущения и RPE, чтобы адаптировать нагрузку.',
+        nextStep: 'Сформулируй задачу: план, отчёт, восстановление или мотивация.',
+    });
+}
+
+async function generateConversationReply({ profile, message, intent, history: _history }: {
+    profile?: any;
+    message?: string;
+    intent?: string;
+    history?: any[];
+}): Promise<string> {
+    const context = await loadContext(profile);
+    const detectedIntent = intent || toInternalIntent(detectIntent(message || '').intent);
+
+    switch (detectedIntent) {
+        case 'greeting':
+            return buildGreeting({ profile, context });
+        case 'motivation':
+            return buildMotivation({ context });
+        case 'plan_today':
+            return buildPlanToday({ profile, context });
+        case 'plan_week':
+            return buildWeekPlan({ context });
+        case 'plan_customize':
+            return 'Чтобы адаптировать план, напиши цели и доступное оборудование — подготовлю обновлённую программу и синхронизирую её в WebApp.';
+        case 'recovery_mode':
+            return buildRecoveryReply({});
+        case 'help':
+            return buildHelpReply();
+        case 'note_save':
+            return buildNoteSaveReply({ profile, message, context });
+        case 'triggers_help':
+            return buildTriggersHelpReply();
+        default:
+            return buildFallback({ message });
+    }
+}
+
+function normalizeHistory(history: any): string[] {
+    if (!Array.isArray(history)) {
+        return [];
+    }
+    return history.slice(-10).map(item => (typeof item === 'string' ? item : JSON.stringify(item)));
+}
+
+export function interpretCommand({ profile, message, history = [] }: {
+    profile?: any;
+    message?: string;
+    history?: any[];
+} = {}) {
+    const text = (message || '').trim();
+    const normalHistory = normalizeHistory(history);
+
+    if (!text) {
+        return {
+            intent: 'unknown',
+            rawIntent: null,
+            confidence: 0,
+            candidateIntents: [],
+            entities: {},
+            slots: {},
+            needsClarification: true,
+            followUp: 'Расскажи, что нужно сделать: план на день, отчёт или помощь с восстановлением.',
+            history: normalHistory,
+        };
+    }
+
+    const detection = detectIntent(text.toLowerCase());
+    let intent = toInternalIntent(detection.intent);
+
+    if (intent === 'unknown' && GREETING_REGEX.test(text)) {
+        intent = 'greeting';
+    } else if (intent === 'unknown' && GRATITUDE_REGEX.test(text)) {
+        intent = 'gratitude';
+    }
+
+    const slots: any = {};
+    if (detection.entities?.reminder) {
+        slots.reminder = detection.entities.reminder;
+    }
+    if (detection.entities?.preferredShiftDays) {
+        slots.preferredShiftDays = detection.entities.preferredShiftDays;
+    }
+    if (detection.entities?.preferredDay) {
+        slots.preferredDay = detection.entities.preferredDay;
+    }
+
+    const noteCandidate = parseNoteCommand(text);
+    if (noteCandidate) {
+        slots.note = noteCandidate;
+        if (intent === 'unknown') {
+            intent = 'note_save';
+        }
+    }
+
+    let needsClarification = false;
+    let followUp: string | null = null;
+
+    if (intent === 'remind_later' && !slots.reminder) {
+        needsClarification = true;
+        followUp = 'Укажи время напоминания: например, «через 30 минут» или «в 20:00».';
+    }
+
+    if (intent === 'note_save' && (!slots.note || !slots.note.content || !slots.note.content.trim())) {
+        needsClarification = true;
+        followUp = 'Добавь текст заметки после команды «сохрани», например: «Сохрани: идеи для восстановительной недели».';
+    }
+
+    if (intent === 'report_start' && normalHistory.slice(-1)[0]?.includes('report_')) {
+        needsClarification = false;
+    }
+
+    const detectionAny = detection as any;
+    const candidateIntents = Array.isArray(detectionAny?.candidates) ? detectionAny.candidates : [];
+
+    return {
+        intent,
+        rawIntent: detection.intent,
+        confidence: detection.confidence,
+        candidateIntents: candidateIntents.map((candidate: any) => ({
+            intent: toInternalIntent(candidate.intent),
+            confidence: candidate.confidence,
+        })),
+        entities: detection.entities || {},
+        slots,
+        needsClarification,
+        followUp,
+        history: normalHistory,
+        profileId: profile?.id || null,
+    };
+}
+
+export async function generateTrainerReply({ profile, message, history = [] }: {
+    profile?: any;
+    message?: string;
+    history?: any[];
+} = {}): Promise<string | null> {
+    const interpretation = interpretCommand({ profile, message, history });
+    const context = await loadContext(profile);
+
+    switch (interpretation.intent) {
+        case 'plan_today':
+            return buildTrainerPlanToday({ profile, context });
+        case 'plan_week':
+            return buildTrainerPlanWeek({ profile, context });
+        case 'report_start':
+            return buildReportKickoffReply();
+        case 'motivation':
+            return buildMotivation({ context });
+        case 'schedule_reschedule':
+            return buildRescheduleReply({ slots: interpretation.slots });
+        case 'remind_later':
+            return buildReminderReply({ slots: interpretation.slots, needsClarification: interpretation.needsClarification });
+        case 'settings_open':
+            return buildSettingsReply();
+        case 'stats_show':
+            return buildStatsReply({ profile, context });
+        case 'recovery_mode':
+            return buildRecoveryReply({});
+        case 'plan_setup':
+            return buildPlanSetupReply();
+        case 'help':
+            return buildHelpReply();
+        case 'note_save':
+            return buildNoteSaveReply({ profile, message, context, slots: interpretation.slots });
+        case 'triggers_help':
+            return buildTriggersHelpReply();
+        case 'gratitude':
+            return 'Всегда пожалуйста! Если потребуется помощь с планом или мотивацией — скажи.';
+        default:
+            if (TRAINER_INTENTS.has(interpretation.intent)) {
+                return buildGenericTrainerFallback(profile);
+            }
+            return null;
+    }
+}
+
+export async function generateGeneralReply({ profile, message, history = [] }: {
+    profile?: any;
+    message?: string;
+    history?: any[];
+} = {}): Promise<string | null> {
+    const interpretation = interpretCommand({ profile, message, history });
+
+    if (TRAINER_INTENTS.has(interpretation.intent) && interpretation.intent !== 'motivation') {
+        return null;
+    }
+
+    return generateConversationReply({
+        profile,
+        message,
+        intent: interpretation.intent,
+        history,
+    });
+}
+
+function computePlanSummary(plan: any): string {
+    const sessions = plan?.sessions || [];
+    return sessions.map((session: any) => {
+        const date = session.date ? parseISO(session.date) : null;
+        const label = date ? format(date, 'd MMM (EEE)', { locale: ru }) : session.date;
+        const focus = session.focus || session.session_type || 'Рабочая сессия';
+        return `• ${label}: ${focus} (RPE ≈ ${session.rpe || 7})`;
+    }).join('\n');
+}
+
+export async function generateTrainingPlan({
+    profile = {},
+    referenceDate = new Date(),
+    history = [],
+    reason = 'manual',
+}: {
+    profile?: any;
+    referenceDate?: Date;
+    history?: any[];
+    reason?: string;
+} = {}) {
+    if (!profile?.id) {
+        throw new Error('Profile id is required to build a training plan.');
+    }
+    if (!db) {
+        throw new Error('Database service is not initialized.');
+    }
+
+    const plan = await fetchAssistantPlan(profile.id, referenceDate);
+    const frequency = plan?.sessions?.length
+        || profile?.preferences?.training_frequency
+        || profile?.training_frequency
+        || 4;
+    const goal = profile?.goals?.description || 'укрепление базовых движений';
+
+    if (!plan) {
+        const fallbackText = [
+            'Пока нет актуальных сессий на неделе.',
+            'Открой раздел «Программы» и обнови расписание — после синхронизации я смогу собрать план.',
+        ].join(' ');
+
+        return {
+            rawText: fallbackText,
+            structured: {
+                plan: null,
+                summary: {
+                    frequency,
+                    goal,
+                    reason,
+                    source: 'plan_missing',
+                    generated_at: new Date().toISOString(),
+                },
+            },
+        };
+    }
+
+    const summaryText = computePlanSummary(plan);
+    const historySnippet = Array.isArray(history) && history.length
+        ? history.slice(-3).map((session: any) => {
+            const date = session.date ? format(new Date(session.date), 'd MMM', { locale: ru }) : '—';
+            const status = session.status || 'unknown';
+            return `• ${date}: ${status}`;
+        }).join('\n')
+        : null;
+
+    const rawText = [
+        `📆 План на неделю (найдено ${plan.sessions.length} сессий):`,
+        summaryText,
+        '',
+        historySnippet ? `Последние тренировки:\n${historySnippet}` : null,
+        `Фокус пользователя: ${goal}.`,
+        'Отмечай прогресс и RPE — буду адаптировать нагрузку.',
+    ].filter(Boolean).join('\n');
+
+    return {
+        rawText,
+        structured: {
+            plan,
+            summary: {
+                frequency,
+                goal,
+                reason,
+                source: plan.source,
+                generated_at: new Date().toISOString(),
+            },
+        },
+    };
+}
+
+function tallyExercises(exercises: any[]): any {
+    if (!Array.isArray(exercises) || !exercises.length) {
+        return {
+            completed: 0,
+            partial: 0,
+            skipped: 0,
+            total: 0,
+            completionRate: 0,
+            overperformed: 0,
+        };
+    }
+
+    let completed = 0;
+    let partial = 0;
+    let skipped = 0;
+    let overperformed = 0;
+
+    for (const exercise of exercises) {
+        const state = exercise.state || (exercise.actual ? 'done' : null);
+        switch (state) {
+            case 'done':
+                completed += 1;
+                if (exercise.actual && exercise.sets && exercise.reps) {
+                    const targetSets = exercise.sets ?? exercise.target?.sets ?? 0;
+                    const targetReps = exercise.reps ?? exercise.target?.reps ?? 0;
+                    const actualSets = exercise.actual?.sets ?? 0;
+                    const actualReps = exercise.actual?.reps ?? 0;
+                    if (targetSets && targetReps && actualSets * actualReps > targetSets * targetReps) {
+                        overperformed += 1;
+                    }
+                }
+                break;
+            case 'in_progress':
+                partial += 1;
+                break;
+            case 'skipped':
+            default:
+                skipped += 1;
+                break;
+        }
+    }
+
+    const total = exercises.length;
+    const completionRate = total
+        ? Math.round(((completed + partial * 0.6) / total) * 100)
+        : 0;
+
+    return {
+        completed,
+        partial,
+        skipped,
+        total,
+        completionRate,
+        overperformed,
+    };
+}
+
+function classifyNotes(notes: string | null | undefined): string | null {
+    if (!notes) {
+        return null;
+    }
+    if (FATIGUE_REGEX.test(notes)) {
+        return 'fatigue';
+    }
+    if (EASY_REGEX.test(notes)) {
+        return 'easy';
+    }
+    return null;
+}
+
+export async function analyzeTrainingReport({
+    session = {},
+    exercises = [],
+    rpe,
+    notes,
+    history = [],
+}: {
+    session?: any;
+    exercises?: any[];
+    rpe?: number;
+    notes?: string;
+    history?: any[];
+} = {}) {
+    const fallbackExercises = Array.isArray((session as any).legacyExercises)
+        ? (session as any).legacyExercises
+        : Array.isArray(session.exercises)
+            ? session.exercises
+            : [];
+    const stats = tallyExercises(exercises.length ? exercises : fallbackExercises);
+    const rpeValue = Number.isFinite(rpe) ? rpe : session.rpe ?? null;
+    const noteFlag = classifyNotes(notes);
+
+    const lines: string[] = [];
+    const suggestions: string[] = [];
+
+    if (stats.total) {
+        lines.push(`• Выполнено ${stats.completed} из ${stats.total} упражнений (ещё ${stats.partial} частично).`);
+    }
+    if (typeof stats.completionRate === 'number') {
+        lines.push(`• Итог по объёму: ${stats.completionRate}%.`);
+    }
+    if (typeof rpeValue === 'number') {
+        lines.push(`• Субъективная нагрузка: RPE ${rpeValue}/10.`);
+        if (rpeValue >= 9) {
+            suggestions.push('recovery');
+            lines.push('⚠️ Высокий RPE — добавь восстановление и следи за сном.');
+        } else if (rpeValue <= 5) {
+            suggestions.push('advance');
+            lines.push('Можно постепенно усложнять: нагрузка воспринимается легко.');
+        }
+    }
+
+    if (stats.overperformed > 0) {
+        suggestions.push('advance');
+        lines.push(`• ${stats.overperformed} упражн. выполнены с запасом — доступна прогрессия.`);
+    } else if (stats.completionRate < 60) {
+        suggestions.push('regress');
+        lines.push('• Объём просел. Предлагаю облегчённую вариацию или сокращение подходов.');
+    } else if (!suggestions.includes('advance') && !suggestions.includes('regress')) {
+        suggestions.push('maintain');
+    }
+
+    if (noteFlag === 'fatigue') {
+        suggestions.push('recovery');
+        lines.push('• Отмечена усталость — добавим больше восстановления в ближайшие дни.');
+    } else if (noteFlag === 'easy' && !suggestions.includes('advance')) {
+        suggestions.push('advance');
+        lines.push('• Тренировка зашла легко — можно поднять уровень сложности.');
+    }
+
+    const recentMisses = history
+        .filter((item: any) => ['skipped', 'missed'].includes(item.status))
+        .slice(0, 3);
+    if (recentMisses.length >= 2) {
+        suggestions.push('recovery');
+        lines.push('• В истории есть пропуски — держим фокус на устойчивости графика.');
+    }
+
+    const header = stats.completionRate >= 90
+        ? '✅ Отличная работа!'
+        : stats.completionRate >= 60
+            ? '👍 Прогресс фиксируем, есть куда усилиться.'
+            : '🔁 Разберём, как сделать комфортнее.';
+
+    const feedback = [
+        header,
+        ...lines,
+        '',
+        'Следующий шаг: обновлю план и подсказки в WebApp, опираясь на отчёт.',
+    ].join('\n');
+
+    return {
+        feedback,
+        completionRate: stats.completionRate,
+        suggestions: Array.from(new Set(suggestions)),
+    };
+}
+
+export async function buildMotivationMessage(profileInput: any): Promise<string> {
+    const profile = profileInput?.profile || profileInput;
+    const context = await loadContext(profile);
+    return buildMotivation({ context });
+}
+
+export async function buildPlanHint(profile: any, { scope = 'day' }: { scope?: string } = {}): Promise<string> {
+    const context = await loadContext(profile);
+    if (scope === 'week') {
+        return buildWeekPlan({ context });
+    }
+    return buildPlanToday({ profile, context });
+}
+
+export async function buildFeedbackMessage({ completionRate, rpe }: {
+    completionRate?: number;
+    rpe?: number;
+}): Promise<string> {
+    const tags: string[] = [];
+
+    const rate = Number.isFinite(completionRate) ? Number(completionRate) : null;
+    if (typeof rate === 'number') {
+        if (rate >= 95) {
+            tags.push('completed_high');
+        } else if (rate >= 60) {
+            tags.push('completed_medium');
+        } else {
+            tags.push('missed');
+        }
+    }
+
+    const template = await pickTemplate('feedback', tags);
+    if (!template) {
+        return 'Зафиксировал результат. Сделаем корректировки и продолжим.';
+    }
+
+    const data = {
+        completion_rate: typeof rate === 'number' ? Math.round(rate) : '—',
+        rpe: rpe !== undefined && rpe !== null ? rpe : '—',
+    };
+
+    const rendered = renderTemplate(template.body, data);
+    return appendMetadata(template, rendered);
+}
+
+export function getEngineCatalog({ successThreshold, slumpThreshold }: {
+    successThreshold?: number;
+    slumpThreshold?: number;
+} = {}) {
+    return [
+        {
+            id: 'internal',
+            title: 'Локальный тренер',
+            description: 'Формирует ответы, планы и мотивацию на основе данных в Supabase без внешних AI-сервисов.',
+            capabilities: [
+                'диалоговые ответы в стиле тренера',
+                'генерация плана на неделю',
+                'анализ отчётов и рекомендации',
+                'мотивационные сообщения и подсказки',
+            ],
+            thresholds: {
+                success: successThreshold ?? 75,
+                slump: slumpThreshold ?? 45,
+            },
+        },
+    ];
+}
+
+export function resolveEngine({ profile }: { profile?: any } = {}): string {
+    if (!profile) {
+        return 'internal';
+    }
+    const preferred = profile.preferences?.ai_provider;
+    if (!preferred || preferred === 'internal') {
+        return 'internal';
+    }
+    return 'internal';
+}
+
+export default {
+    interpretCommand,
+    generateTrainerReply,
+    generateGeneralReply,
+    generateTrainingPlan,
+    analyzeTrainingReport,
+    buildMotivationMessage,
+    buildPlanHint,
+    buildFeedbackMessage,
+    getEngineCatalog,
+    resolveEngine,
+    initializeDb,
+};
+

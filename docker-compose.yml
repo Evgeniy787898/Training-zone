@@ -1,0 +1,179 @@
+
+services:
+  backend:
+    image: "tzona/backend:${IMAGE_TAG:-latest}"
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_TAG:-latest}
+    stop_signal: SIGTERM
+    stop_grace_period: 20s
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"import('http').then(({request})=>{const req=request({host:'127.0.0.1',port:3001,path:'/health',timeout:4000},res=>process.exit(res.statusCode===200?0:1));req.on('error',()=>process.exit(1));req.end();});\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - PORT=3001
+      - NODE_ENV=production
+    secrets:
+      - backend_env
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: tzona-postgres
+    environment:
+      - POSTGRES_USER=tzona
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=tzona
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tzona"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  image-processor:
+    image: "tzona/image-processor:${IMAGE_TAG:-latest}"
+    build:
+      context: ./services/image-processor
+      dockerfile: Dockerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_TAG:-latest}
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport sys, urllib.request\ntry:\n    with urllib.request.urlopen('http://127.0.0.1:3002/api/health', timeout=4) as resp:\n        sys.exit(0 if resp.status == 200 else 1)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    secrets:
+      - image_processor_env
+    volumes:
+      - ./services/image-processor:/app
+
+  ai-advisor:
+    image: "tzona/ai-advisor:${IMAGE_TAG:-latest}"
+    build:
+      context: ./services/ai-advisor
+      dockerfile: Dockerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_TAG:-latest}
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
+    ports:
+      - "3003:3003"
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport sys, urllib.request\ntry:\n    with urllib.request.urlopen('http://127.0.0.1:3003/api/health', timeout=4) as resp:\n        sys.exit(0 if resp.status == 200 else 1)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    env_file:
+      - ./services/ai-advisor/.env
+    environment:
+      - AI_ADVISOR_PROVIDER=${AI_ADVISOR_PROVIDER:-openai}
+      - AI_ADVISOR_MODEL=${AI_ADVISOR_MODEL:-gpt-4o-mini}
+      - AI_ADVISOR_BASE_PROMPT=${AI_ADVISOR_BASE_PROMPT:-You are a TZONA AI coach}
+      - AI_ADVISOR_TEMPERATURE=${AI_ADVISOR_TEMPERATURE:-0.2}
+      - AI_ADVISOR_MAX_TOKENS=${AI_ADVISOR_MAX_TOKENS:-800}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    secrets:
+      - ai_advisor_env
+    volumes:
+      - ./services/ai-advisor:/app
+
+  analytics:
+    image: "tzona/analytics:${IMAGE_TAG:-latest}"
+    build:
+      context: ./services/analytics
+      dockerfile: Dockerfile
+      args:
+        IMAGE_VERSION: ${IMAGE_TAG:-latest}
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
+    ports:
+      - "3004:3004"
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport sys, urllib.request\ntry:\n    with urllib.request.urlopen('http://127.0.0.1:3004/api/health', timeout=4) as resp:\n        sys.exit(0 if resp.status == 200 else 1)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    environment:
+      - ANALYTICS_DATABASE_URL=${ANALYTICS_DATABASE_URL:-postgresql://tzona:password@postgres:5432/tzona}
+      - ANALYTICS_DB_POOL_MIN=${ANALYTICS_DB_POOL_MIN:-1}
+      - ANALYTICS_DB_POOL_MAX=${ANALYTICS_DB_POOL_MAX:-5}
+      - ANALYTICS_DB_STATEMENT_TIMEOUT_MS=${ANALYTICS_DB_STATEMENT_TIMEOUT_MS:-8000}
+      - ANALYTICS_STATS_WEEKLY_LIMIT=${ANALYTICS_STATS_WEEKLY_LIMIT:-8}
+      - ANALYTICS_STATS_PROGRESS_LIMIT=${ANALYTICS_STATS_PROGRESS_LIMIT:-10}
+    secrets:
+      - analytics_env
+    volumes:
+      - ./services/analytics:/app
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --port=8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+
+secrets:
+  backend_env:
+    file: ./secrets/backend.env
+  ai_advisor_env:
+    file: ./secrets/ai-advisor.env
+  analytics_env:
+    file: ./secrets/analytics.env
+  image_processor_env:
+    file: ./secrets/image-processor.env

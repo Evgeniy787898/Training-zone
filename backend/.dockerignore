@@ -1,0 +1,22 @@
+node_modules
+npm-debug.log
+Dockerfile*
+.dockerignore
+.git
+.gitignore
+.vscode
+coverage
+.dist
+build
+dist
+.env*
+logs
+.tmp
+.cache
+**/*.tsbuildinfo
+**/__tests__
+**/*.spec.*
+**/*.snapshot.*
+
+# Prisma artifacts will be generated during build
+prisma/dev.db

@@ -1,0 +1,8 @@
+{
+  "backend/**/*.{ts,tsx}": [
+    "npm run lint --workspace=tzona-v2-backend"
+  ],
+  "frontend/**/*.{ts,tsx,vue}": [
+    "npm run lint --workspace=tzona-v2-frontend"
+  ]
+}
