@@ -7,26 +7,43 @@ import type { RateLimitOptions } from '../types/middleware.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { issueAuthToken, validateAuthToken } from '../modules/profile/tokenService.js';
 import { issueCsrfToken } from '../modules/security/csrf.js';
+import {
+    getBruteForceKey,
+    isBlocked,
+    getRetryAfterSeconds,
+    recordFailedAttempt,
+    recordSuccessfulAttempt,
+    getBlockDurationMs,
+} from '../modules/security/bruteForce.js';
 import { rateLimitConfig } from '../config/constants.js';
 import { respondWithAppError, respondWithSuccess } from '../utils/apiResponses.js';
 import { AppError } from '../services/errors.js';
-import { createRecurringTask } from '../patterns/recurringTask.js';
+import { ERROR_CODES } from '../types/errors.js';
 import type { TelegramWebAppUser } from '../types/telegram.js';
 import { isTelegramWebAppUser } from '../utils/typeGuards.js';
 
 import {
     verifyPinSchema,
     telegramAuthSchema,
+    changePinSchema, // SETT-F01
     type VerifyPinPayload,
-    type TelegramAuthPayload
+    type TelegramAuthPayload,
+    type ChangePinPayload, // SETT-F01
 } from '../contracts/auth.js';
 
 import type { ProfileService } from '../modules/profile/profile.service.js';
+import type { RefreshTokenService } from '../modules/profile/refreshToken.service.js';
+import type { AuditService } from '../modules/security/audit.service.js';
 
-export function createAuthRouter(profileService: ProfileService) {
+export function createAuthRouter(
+    profileService: ProfileService,
+    refreshTokenService: RefreshTokenService,
+    auditService: AuditService
+) {
     const router = Router();
 
     const TELEGRAM_WEBAPP_SECRET = process.env.TELEGRAM_WEBAPP_SECRET;
+    const BRUTE_FORCE_BLOCK_MS = getBlockDurationMs();
 
     interface AuthTokenPayload extends JwtPayload {
         profileId?: string;
@@ -43,91 +60,6 @@ export function createAuthRouter(profileService: ProfileService) {
     };
 
     const verifyPinLimiter = createRateLimiter(pinRateLimitOptions);
-
-    type BruteForceEntry = {
-        attempts: number;
-        blockedUntil?: number;
-        lastAttempt: number;
-    };
-
-    const bruteForceMap = new Map<string, BruteForceEntry>();
-    const BRUTE_FORCE_MAX_ATTEMPTS = Number.isFinite(Number(process.env.PIN_MAX_ATTEMPTS)) && Number(process.env.PIN_MAX_ATTEMPTS) > 0
-        ? Math.floor(Number(process.env.PIN_MAX_ATTEMPTS))
-        : rateLimitConfig.bruteForce.maxAttempts;
-    const BRUTE_FORCE_BLOCK_MS = Number.isFinite(Number(process.env.PIN_BLOCK_DURATION_MS)) && Number(process.env.PIN_BLOCK_DURATION_MS) > 0
-        ? Math.floor(Number(process.env.PIN_BLOCK_DURATION_MS))
-        : rateLimitConfig.bruteForce.blockDurationMs;
-
-    const pruneBruteForceMap = () => {
-        const now = Date.now();
-        for (const [key, entry] of bruteForceMap.entries()) {
-            if (entry.blockedUntil && entry.blockedUntil < now - BRUTE_FORCE_BLOCK_MS) {
-                bruteForceMap.delete(key);
-            } else if (!entry.blockedUntil && entry.lastAttempt < now - BRUTE_FORCE_BLOCK_MS) {
-                bruteForceMap.delete(key);
-            }
-        }
-    };
-
-    createRecurringTask({
-        name: 'pin-bruteforce-prune',
-        intervalMs: rateLimitConfig.bruteForce.pruneIntervalMs,
-        immediate: false,
-        run: pruneBruteForceMap,
-    });
-
-    function getBruteForceKey(req: Request, telegramNumericId: number | null): string {
-        if (telegramNumericId !== null && Number.isFinite(telegramNumericId)) {
-            return `telegram:${telegramNumericId}`;
-        }
-        const profileId = req.header('x-profile-id');
-        if (profileId) {
-            return `profile:${profileId}`;
-        }
-        const initData = req.header('x-telegram-init-data') || req.body?.initData;
-        if (initData) {
-            return `initData:${crypto.createHash('sha256').update(initData).digest('hex')}`;
-        }
-        return `ip:${req.ip}`;
-    }
-
-    function isBlocked(key: string) {
-        const entry = bruteForceMap.get(key);
-        if (!entry?.blockedUntil) {
-            return false;
-        }
-        if (entry.blockedUntil > Date.now()) {
-            return true;
-        }
-        bruteForceMap.delete(key);
-        return false;
-    }
-
-    function getRetryAfterSeconds(key: string) {
-        const entry = bruteForceMap.get(key);
-        if (!entry?.blockedUntil) {
-            return null;
-        }
-        const diff = entry.blockedUntil - Date.now();
-        return diff > 0 ? Math.ceil(diff / 1000) : 0;
-    }
-
-    function recordFailedAttempt(key: string) {
-        const now = Date.now();
-        const entry = bruteForceMap.get(key) ?? { attempts: 0, lastAttempt: now };
-        entry.attempts += 1;
-        entry.lastAttempt = now;
-        if (entry.attempts >= BRUTE_FORCE_MAX_ATTEMPTS) {
-            entry.blockedUntil = now + BRUTE_FORCE_BLOCK_MS;
-            console.warn(`[security] Blocking key ${key} for ${BRUTE_FORCE_BLOCK_MS / 1000}s due to brute-force attempts`);
-        }
-        bruteForceMap.set(key, entry);
-        return Boolean(entry.blockedUntil && entry.blockedUntil > now);
-    }
-
-    function recordSuccessfulAttempt(key: string) {
-        bruteForceMap.delete(key);
-    }
 
     // Verify Telegram WebApp initData
     async function verifyTelegramInitData(initData: string): Promise<{ user?: TelegramWebAppUser; hash?: string } | null> {
@@ -228,12 +160,20 @@ export function createAuthRouter(profileService: ProfileService) {
                 profileId: profile.id,
                 telegramId: verified.user.id,
             });
+            const refreshToken = (await refreshTokenService.createRefreshToken(profile.id)).token;
             const csrfToken = issueCsrfToken(res, profile.id).token;
+
+            await auditService.log('LOGIN_SUCCESS', profile.id, 'SUCCESS', {
+                ip: req.ip,
+                userAgent: req.get('user-agent'),
+                metadata: { method: 'telegram', telegramId: Number(telegramId) },
+            });
 
             return respondWithSuccess(
                 res,
                 {
                     token,
+                    refreshToken,
                     profileId: profile.id,
                     user: verified.user,
                     csrfToken,
@@ -449,6 +389,12 @@ export function createAuthRouter(profileService: ProfileService) {
                         recordSuccessfulAttempt(bruteForceKey);
                         resetRateLimitKey(pinRateLimitOptions, req);
 
+                        await auditService.log('LOGIN_SUCCESS', profileByPin.id, 'SUCCESS', {
+                            ip: req.ip,
+                            userAgent: req.get('user-agent'),
+                            metadata: { method: 'pin_web' },
+                        });
+
                         return respondWithSuccess(
                             res,
                             {
@@ -470,6 +416,7 @@ export function createAuthRouter(profileService: ProfileService) {
                         profileId: webProfile.id,
                         telegramId: webProfile.telegramId ? webProfile.telegramId.toString() : null,
                     });
+                    const refreshToken = (await refreshTokenService.createRefreshToken(webProfile.id)).token;
                     const csrfToken = issueCsrfToken(res, webProfile.id).token;
 
                     recordSuccessfulAttempt(bruteForceKey);
@@ -481,6 +428,7 @@ export function createAuthRouter(profileService: ProfileService) {
                             valid: true,
                             message: 'PIN установлен',
                             token,
+                            refreshToken,
                             profileId: webProfile.id,
                             csrfToken,
                         },
@@ -562,6 +510,12 @@ export function createAuthRouter(profileService: ProfileService) {
                         ip: req.ip,
                         profileId: profile.id,
                     });
+
+                    await auditService.log('LOGIN_FAILURE', profile.id, 'FAILURE', {
+                        ip: req.ip,
+                        userAgent: req.get('user-agent'),
+                        metadata: { method: 'pin', reason: 'invalid_pin' },
+                    });
                 } else {
                     recordSuccessfulAttempt(bruteForceKey);
                     resetRateLimitKey(pinRateLimitOptions, req);
@@ -571,6 +525,7 @@ export function createAuthRouter(profileService: ProfileService) {
                         profileId: profile.id,
                         telegramId: numericId,
                     });
+                    const refreshToken = (await refreshTokenService.createRefreshToken(profile.id)).token;
                     const csrfToken = issueCsrfToken(res, profile.id).token;
 
                     console.log('[verify-pin] PIN verified successfully', {
@@ -579,12 +534,19 @@ export function createAuthRouter(profileService: ProfileService) {
                         tokenPrefix: token ? token.substring(0, 20) + '...' : null,
                     });
 
+                    await auditService.log('LOGIN_SUCCESS', profile.id, 'SUCCESS', {
+                        ip: req.ip,
+                        userAgent: req.get('user-agent'),
+                        metadata: { method: 'pin' },
+                    });
+
                     return respondWithSuccess(
                         res,
                         {
                             valid: true,
                             message: 'PIN верный',
                             token,
+                            refreshToken,
                             profileId: profile.id,
                             csrfToken,
                         },
@@ -685,6 +647,209 @@ export function createAuthRouter(profileService: ProfileService) {
 
             // Обработка других ошибок
             console.error('[verify-pin] Unexpected error:', error);
+            next(error);
+        }
+    });
+
+    // POST /api/auth/change-pin (SETT-F01)
+    // Requires authentication and old PIN verification
+    router.post('/change-pin', verifyPinLimiter, validateRequest({ body: changePinSchema }), async (req: Request, res: Response, next) => {
+        try {
+            const { oldPin, newPin } = req.validated?.body as ChangePinPayload;
+            const prisma = req.prisma;
+            const profile = (req as any).profile;
+
+            if (!prisma) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'database_unavailable',
+                        message: 'Database connection not available',
+                        statusCode: 500,
+                        category: 'dependencies',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            // Require authenticated profile
+            if (!profile?.id) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'unauthorized',
+                        message: 'Требуется авторизация для смены PIN',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            // Get current profile with PIN
+            const currentProfile = await profileService.getProfileById(profile.id);
+            if (!currentProfile) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'profile_not_found',
+                        message: 'Профиль не найден',
+                        statusCode: 404,
+                        category: 'not_found',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            // Verify old PIN
+            const oldPinHash = hashPin(oldPin);
+            if (currentProfile.pinHash !== oldPinHash) {
+                const bruteForceKey = getBruteForceKey(req, currentProfile.telegramId ? Number(currentProfile.telegramId) : null);
+                const blocked = recordFailedAttempt(bruteForceKey);
+
+                if (blocked) {
+                    blockRateLimitKey(pinRateLimitOptions, req, BRUTE_FORCE_BLOCK_MS);
+                }
+
+                await auditService.log('PIN_CHANGE_FAILURE', profile.id, 'FAILURE', {
+                    ip: req.ip,
+                    userAgent: req.get('user-agent'),
+                    metadata: { reason: 'invalid_old_pin' },
+                });
+
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'invalid_pin',
+                        message: 'Неверный текущий PIN',
+                        statusCode: 400,
+                        category: 'validation',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            // Update to new PIN
+            const newPinHash = hashPin(newPin);
+            await profileService.updatePin(profile.id, newPinHash);
+
+            // Reset rate limit on success
+            const bruteForceKey = getBruteForceKey(req, currentProfile.telegramId ? Number(currentProfile.telegramId) : null);
+            recordSuccessfulAttempt(bruteForceKey);
+            resetRateLimitKey(pinRateLimitOptions, req);
+
+            await auditService.log('PIN_CHANGE_SUCCESS', profile.id, 'SUCCESS', {
+                ip: req.ip,
+                userAgent: req.get('user-agent'),
+            });
+
+            console.log('[change-pin] PIN changed successfully', { profileId: profile.id });
+
+            return respondWithSuccess(
+                res,
+                {
+                    success: true,
+                    message: 'PIN успешно изменён',
+                },
+                { meta: req.traceId ? { traceId: req.traceId } : undefined },
+            );
+        } catch (error) {
+            if (error instanceof z.ZodError) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'validation_failed',
+                        message: 'Некорректные данные',
+                        statusCode: 422,
+                        category: 'validation',
+                        details: error.issues,
+                        exposeDetails: true,
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+            console.error('[change-pin] Error:', error);
+            next(error);
+        }
+    });
+
+    // POST /api/auth/refresh
+    router.post('/refresh', async (req: Request, res: Response, next) => {
+        try {
+            const { refreshToken } = req.body;
+            if (!refreshToken) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: ERROR_CODES.INVALID_REQUEST,
+                        message: 'Refresh token is required',
+                        statusCode: 400,
+                        category: 'validation',
+                    }),
+                );
+            }
+
+            const { newRefreshToken, profileId } = await refreshTokenService.rotateRefreshToken(refreshToken);
+
+            const profile = await profileService.getProfileById(profileId);
+            if (!profile) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: ERROR_CODES.PROFILE_NOT_FOUND,
+                        message: 'Profile not found',
+                        statusCode: 404,
+                        category: 'not_found',
+                    }),
+                );
+            }
+
+            const { token } = issueAuthToken({
+                profileId: profile.id,
+                telegramId: profile.telegramId ? profile.telegramId.toString() : null,
+            });
+
+            return respondWithSuccess(res, {
+                token,
+                refreshToken: newRefreshToken.token,
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    // POST /api/auth/logout
+    router.post('/logout', async (req: Request, res: Response, next) => {
+        try {
+            const { refreshToken } = req.body;
+            if (refreshToken) {
+                await refreshTokenService.revoke(refreshToken);
+                // Extract profileId from refresh token if possible, but here we might not have it decoded easily without looking it up.
+                // However, logout is usually authenticated or we just revoke.
+                // For simplicity, we log LOGOUT if we can.
+                // Since this route might not be protected by auth middleware (it receives token in body), we can't easily guess profileId unless we decode/lookup.
+                // But refreshTokenService.revoke(token) returns void.
+                // Let's assume we want to log it if successful.
+                // If we want profileId, we'd need to fetch it.
+                // Given the constraints, maybe skip profileId for logout or enhance revoke to return it.
+                // For now, let's just log "LOGOUT" without profileId if we don't have it, or rely on token lookup if implemented.
+                // Actually, let's skip profileId lookup to keep it fast, or if req.profile exists?
+                // This route is NOT protected by profileContextMiddleware in standard way commonly used for these kinds of endpoints?
+                // routesSetup.ts says: app.use('/api', profileContextMiddleware(prisma)); so yes, it is.
+                // So req.profile should be available IF the request has specific headers (x-profile-id) or Authorization,
+                // BUT /logout usually just sends refreshToken.
+                // Let's check profileContextMiddleware usage.
+                // If req.profile is available, use it.
+            }
+
+            const profileId = (req as any).profile?.id;
+            await auditService.log('LOGOUT', profileId || null, 'SUCCESS', {
+                ip: req.ip,
+                userAgent: req.get('user-agent'),
+            });
+
+            return respondWithSuccess(res, { message: 'Logged out' });
+        } catch (error) {
             next(error);
         }
     });

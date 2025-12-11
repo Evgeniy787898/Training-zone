@@ -108,20 +108,33 @@ export class ApplicationHealthCheck {
 
     private async checkCacheStatus(result: HealthCheckResult): Promise<void> {
         try {
-            // This is a simplified check - in a real implementation, 
-            // you would check the actual cache size and status
-            const cacheSize = 0; // Placeholder
+            let totalSize = 0;
+            if (typeof localStorage !== 'undefined') {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key) {
+                        const value = localStorage.getItem(key) || '';
+                        totalSize += key.length + value.length;
+                    }
+                }
+            }
 
-            result.checks.cache.size = cacheSize;
+            // Convert to bytes (approximation for UTF-16)
+            const sizeInBytes = totalSize * 2;
+            result.checks.cache.size = sizeInBytes;
             result.checks.cache.status = 'healthy';
 
-            // If cache is too large, mark as degraded
-            if (cacheSize > 1000) {
+            // Warn if cache > 5MB, critical if > 10MB (browser limits are usually 5-10MB)
+            if (sizeInBytes > 10 * 1024 * 1024) {
+                result.checks.cache.status = 'unhealthy';
+                result.checks.cache.error = 'Кэш переполнен (более 10 МБ)';
+            } else if (sizeInBytes > 4.5 * 1024 * 1024) {
                 result.checks.cache.status = 'degraded';
+                result.checks.cache.error = 'Кэш почти заполнен';
             }
         } catch (error) {
             result.checks.cache.status = 'unhealthy';
-            result.checks.cache.error = 'Ошибка кэша';
+            result.checks.cache.error = 'Ошибка доступа к кэшу';
         }
     }
 

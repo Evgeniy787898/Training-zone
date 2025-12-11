@@ -6,10 +6,10 @@
 /**
  * Простое сжатие строки (удаление пробелов, минификация JSON)
  */
-export function compress(data: any): string {
+export function compress(data: unknown): string {
   try {
     const jsonString = JSON.stringify(data);
-    
+
     // Минификация: удаление лишних пробелов в JSON
     // Это простое сжатие, для реального сжатия можно использовать pako или lz-string
     return jsonString
@@ -37,7 +37,7 @@ export function decompress<T>(compressed: string): T {
 /**
  * Проверка нужно ли использовать сжатие (для больших данных)
  */
-export function shouldCompress(data: any): boolean {
+export function shouldCompress(data: unknown): boolean {
   try {
     const jsonString = JSON.stringify(data);
     // Сжимаем если данные больше 50KB
@@ -50,7 +50,7 @@ export function shouldCompress(data: any): boolean {
 /**
  * Получение размера данных в байтах
  */
-export function getDataSize(data: any): number {
+export function getDataSize(data: unknown): number {
   try {
     return new Blob([JSON.stringify(data)]).size;
   } catch {

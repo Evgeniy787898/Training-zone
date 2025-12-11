@@ -1,3 +1,6 @@
+/* App Layout Styles - extracted from App.vue */
+@import './assets/css/app-layout.css';
+
 :root {
     color-scheme: light;
 
@@ -11,7 +14,8 @@
     /* Text */
     --color-text-primary: #202123;
     --color-text-secondary: #6e6e80;
-    --color-text-muted: #acacbe;
+    --color-text-muted: #707080;
+    /* DS-004: Darkened for WCAG AA (was #acacbe ~2.5:1, now ~5.5:1) */
     --color-text-inverse: #ffffff;
 
     /* Accents */
@@ -30,6 +34,10 @@
     --color-danger: #ef4146;
     --color-warning: #e5a000;
     --color-success: #10a37f;
+    --color-success-hover: #059669;
+    /* DS-001: Success hover state */
+    --color-success-light: rgba(16, 163, 127, 0.4);
+    /* DS-001: Success shadow/glow */
     --color-info: #3c82f6;
 
     /* Shadows (Soft & Diffused) */
@@ -118,6 +126,16 @@
     --header-height: 60px;
     --nav-bar-height: 64px;
     --footer-height: 64px;
+
+    /* DS-006: Z-Index Tokens */
+    --z-index-dropdown: 100;
+    --z-index-sticky: 200;
+    --z-index-fixed: 300;
+    --z-index-modal-backdrop: 400;
+    --z-index-modal: 500;
+    --z-index-popover: 600;
+    --z-index-tooltip: 700;
+    --z-index-toast: 800;
 }
 
 :root.dark {
@@ -134,7 +152,8 @@
     /* Text */
     --color-text-primary: #ececf1;
     --color-text-secondary: #c5c5d2;
-    --color-text-muted: #8e8ea0;
+    --color-text-muted: #a0a0b0;
+    /* DS-004: Lightened for WCAG AA (was #8e8ea0 ~4:1, now ~5:1) */
     --color-text-inverse: #202123;
 
     /* Borders */
@@ -148,6 +167,39 @@
     --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+}
+
+/* THEME-F03: High Contrast Mode for Accessibility */
+:root.high-contrast,
+:root.dark.high-contrast {
+    /* Maximize text contrast */
+    --color-text-primary: #ffffff;
+    --color-text-secondary: #f0f0f0;
+    --color-text-muted: #d0d0d0;
+
+    /* Stronger borders */
+    --color-border: #888888;
+    --color-border-subtle: #666666;
+    --color-border-strong: #aaaaaa;
+
+    /* Pure black background for max contrast */
+    --color-bg: #000000;
+    --color-bg-secondary: #0a0a0a;
+    --color-bg-elevated: #111111;
+    --color-bg-modal: #0a0a0a;
+
+    /* Brighter accents */
+    --color-accent: #00ff88;
+    --color-accent-hover: #00cc70;
+    --color-success: #00ff88;
+    --color-danger: #ff5555;
+    --color-warning: #ffaa00;
+    --color-info: #55aaff;
+
+    /* Remove subtle shadows, use solid borders */
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
 }
 
 /* --- Reset & Base --- */
@@ -229,7 +281,7 @@ button {
 .page-shell {
     max-width: var(--max-width-content);
     margin: 0 auto;
-    padding: var(--space-lg) var(--space-md);
+    padding: var(--space-lg) var(--space-md) calc(var(--space-lg) + env(safe-area-inset-bottom));
     width: 100%;
 }
 
@@ -348,4 +400,55 @@ button {
 
 .animate-fade-in {
     animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* DS-002: View Transitions API */
+@supports (view-transition-name: none) {
+
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+        animation-duration: var(--duration-slow);
+        animation-timing-function: var(--ease-in-out);
+    }
+
+    ::view-transition-old(root) {
+        animation-name: view-fade-out;
+    }
+
+    ::view-transition-new(root) {
+        animation-name: view-fade-in;
+    }
+
+    @keyframes view-fade-out {
+        from {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        to {
+            opacity: 0;
+            transform: scale(0.98);
+        }
+    }
+
+    @keyframes view-fade-in {
+        from {
+            opacity: 0;
+            transform: scale(1.02);
+        }
+
+        to {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+
+    /* Reduce motion preference */
+    @media (prefers-reduced-motion: reduce) {
+
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+            animation: none;
+        }
+    }
 }

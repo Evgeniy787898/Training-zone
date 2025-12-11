@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { fileURLToPath, URL } from 'node:url';
+import { templateCompilerOptions } from '@tresjs/core';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), '');
@@ -12,7 +13,9 @@ export default defineConfig(({ mode }) => {
     const shouldDropConsole = env.VITE_DROP_CONSOLE !== 'false';
 
     const plugins = [
-        vue(),
+        vue({
+            ...templateCompilerOptions,
+        }),
         splitVendorChunkPlugin(),
         VitePWA({
             registerType: 'autoUpdate',

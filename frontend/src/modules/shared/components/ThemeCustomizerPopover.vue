@@ -48,6 +48,60 @@
           </div>
         </button>
       </div>
+
+      <!-- Custom Accent Sliders (DS-003) -->
+      <div class="accent-section">
+        <h3 class="accent-section__title">Свой акцент</h3>
+        <div class="accent-sliders">
+          <div class="accent-slider">
+            <label class="accent-slider__label" for="accent-r">R</label>
+            <input
+              id="accent-r"
+              type="range"
+              min="0"
+              max="255"
+              :value="accentR"
+              class="accent-slider__input accent-slider__input--red"
+              :style="{ background: redGradient }"
+              @input="handleAccentChange('r', $event)"
+            />
+            <span class="accent-slider__value">{{ accentR }}</span>
+          </div>
+          <div class="accent-slider">
+            <label class="accent-slider__label" for="accent-g">G</label>
+            <input
+              id="accent-g"
+              type="range"
+              min="0"
+              max="255"
+              :value="accentG"
+              class="accent-slider__input accent-slider__input--green"
+              :style="{ background: greenGradient }"
+              @input="handleAccentChange('g', $event)"
+            />
+            <span class="accent-slider__value">{{ accentG }}</span>
+          </div>
+          <div class="accent-slider">
+            <label class="accent-slider__label" for="accent-b">B</label>
+            <input
+              id="accent-b"
+              type="range"
+              min="0"
+              max="255"
+              :value="accentB"
+              class="accent-slider__input accent-slider__input--blue"
+              :style="{ background: blueGradient }"
+              @input="handleAccentChange('b', $event)"
+            />
+            <span class="accent-slider__value">{{ accentB }}</span>
+          </div>
+        </div>
+        <div class="accent-preview-row">
+          <span class="accent-preview-label">Предпросмотр:</span>
+          <div class="accent-preview-swatch" :style="{ background: accentHex }"></div>
+          <span class="accent-preview-hex">{{ accentHex }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- Footer -->
@@ -56,12 +110,14 @@
         Сбросить к стандартному
       </button>
     </footer>
+
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useAppStore } from '@/stores/app';
+import hapticFeedback from '@/utils/hapticFeedback';
 
 const appStore = useAppStore();
 
@@ -85,7 +141,7 @@ const rgbToHex = (c: { r: number, g: number, b: number }) =>
 // Smart Presets
 const smartPresets = [
   {
-    name: 'Nocturne',
+    name: 'Тёмная',
     colors: {
       accent: '#60a5fa',
       background: '#050505',
@@ -94,65 +150,11 @@ const smartPresets = [
     }
   },
   {
-    name: 'Deep Ocean',
+    name: 'Светлая',
     colors: {
-      accent: '#22d3ee',
-      background: '#0f172a',
-      textPrimary: '#f8fafc',
-      textSecondary: '#94a3b8'
-    }
-  },
-  {
-    name: 'Cyberpunk',
-    colors: {
-      accent: '#f472b6',
-      background: '#18181b',
-      textPrimary: '#e4e4e7',
-      textSecondary: '#a1a1aa'
-    }
-  },
-  {
-    name: 'Forest',
-    colors: {
-      accent: '#4ade80',
-      background: '#022c22',
-      textPrimary: '#ecfdf5',
-      textSecondary: '#6ee7b7'
-    }
-  },
-  {
-    name: 'Sunset',
-    colors: {
-      accent: '#fb923c',
-      background: '#2a1205',
-      textPrimary: '#fff7ed',
-      textSecondary: '#fdba74'
-    }
-  },
-  {
-    name: 'Royal',
-    colors: {
-      accent: '#c084fc',
-      background: '#1e1b4b',
-      textPrimary: '#faf5ff',
-      textSecondary: '#e9d5ff'
-    }
-  },
-  {
-    name: 'Crimson',
-    colors: {
-      accent: '#f87171',
-      background: '#2b0a0a',
-      textPrimary: '#fef2f2',
-      textSecondary: '#fca5a5'
-    }
-  },
-  {
-    name: 'Slate',
-    colors: {
-      accent: '#94a3b8',
-      background: '#0f172a',
-      textPrimary: '#f1f5f9',
+      accent: '#3b82f6',
+      background: '#ffffff',
+      textPrimary: '#0f172a',
       textSecondary: '#64748b'
     }
   }
@@ -175,11 +177,41 @@ const applyPreset = (preset: typeof smartPresets[0]) => {
     textPrimary: hexToRgb(preset.colors.textPrimary),
     textSecondary: hexToRgb(preset.colors.textSecondary),
   });
+  hapticFeedback.selection();
 };
 
 const handleReset = () => {
   appStore.resetCustomTheme();
 };
+
+// DS-003: RGB Accent Sliders
+const accentR = computed(() => currentPalette.value.accent.r);
+const accentG = computed(() => currentPalette.value.accent.g);
+const accentB = computed(() => currentPalette.value.accent.b);
+
+const accentHex = computed(() => rgbToHex(currentPalette.value.accent));
+
+const handleAccentChange = (channel: 'r' | 'g' | 'b', event: Event) => {
+  const target = event.target as HTMLInputElement;
+  const value = parseInt(target.value, 10);
+  appStore.updateCustomThemeColor('accent', { [channel]: value });
+  hapticFeedback.light();
+};
+
+const redGradient = computed(() => {
+  const { g, b } = currentPalette.value.accent;
+  return `linear-gradient(to right, rgb(0, ${g}, ${b}), rgb(255, ${g}, ${b}))`;
+});
+
+const greenGradient = computed(() => {
+  const { r, b } = currentPalette.value.accent;
+  return `linear-gradient(to right, rgb(${r}, 0, ${b}), rgb(${r}, 255, ${b}))`;
+});
+
+const blueGradient = computed(() => {
+  const { r, g } = currentPalette.value.accent;
+  return `linear-gradient(to right, rgb(${r}, ${g}, 0), rgb(${r}, ${g}, 255))`;
+});
 </script>
 
 <style scoped>
@@ -396,5 +428,107 @@ const handleReset = () => {
 
 .footer-btn:hover {
   background: var(--color-surface-hover);
+}
+
+/* DS-003: Accent Sliders */
+.accent-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.accent-section__title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 1rem;
+}
+
+.accent-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.accent-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.accent-slider__label {
+  width: 20px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.accent-slider__input {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  appearance: none;
+  background: var(--color-border);
+  cursor: pointer;
+}
+
+.accent-slider__input::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 2px solid var(--color-bg);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.accent-slider__input::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+.accent-slider__input::-webkit-slider-thumb {
+  background: white;
+}
+
+.accent-slider__value {
+  width: 36px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.accent-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+}
+
+.accent-preview-label {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.accent-preview-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 2px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.accent-preview-hex {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-family: monospace;
+  text-transform: uppercase;
 }
 </style>

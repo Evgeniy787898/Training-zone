@@ -20,6 +20,11 @@ import assistantRouter from '../routes/assistant.js';
 import { createUserProgramsRouter } from '../routes/userPrograms.js';
 import mediaRouter from '../routes/media.js';
 import microservicesProxy from '../routes/microservicesProxy.js';
+import { createProgressRouter } from '../routes/progress.js';
+import { createProgressPhotosRouter } from '../routes/progressPhotos.js';
+import { createBodyScanRouter } from '../routes/bodyScan.js';
+import { createEvolutionRouter } from '../routes/evolution.js';
+import analyticsRouter from '../routes/analytics.js';
 
 const PROGRAM_SCHEMA_ERROR_CODES = new Set(['P2021', 'P2022', 'P2010', 'P2003', 'P2000']);
 
@@ -58,7 +63,7 @@ export function setupRoutes(app: Express, prisma: any, services: ServiceContaine
     const cacheRouter = createLazyRouter(async () => import('../routes/cache.js'));
 
     // Public routes
-    app.use('/api/auth', createAuthRouter(services.profileService));
+    app.use('/api/auth', createAuthRouter(services.profileService, services.refreshTokenService, services.auditService));
     app.use('/api/media', mediaRouter);
     app.use('/api/cache', cacheRouter);
     app.use('/api/metrics', metricsRouter);
@@ -166,14 +171,21 @@ export function setupRoutes(app: Express, prisma: any, services: ServiceContaine
     app.use('/api/sessions', createSessionsRouter(services.sessionService));
     app.use('/api/profile', createProfileRouter(services.profileService));
     app.use('/api/reports', reportsRouter);
-    app.use('/api/exercises', createExercisesRouter(services.exerciseService));
+    app.use('/api/exercises', createExercisesRouter(services.exerciseService, services.favoritesService));
     app.use('/api/achievements', achievementsRouter);
     app.use('/api/daily-advice', dailyAdviceRouter);
     app.use('/api/assistant', assistantRouter);
     app.use('/api/user-programs', createUserProgramsRouter(services.userProgramService));
+    app.use('/api/progress', createProgressRouter(prisma));
+    app.use('/api/progress-photos', createProgressPhotosRouter(services.progressPhotoService));
+    app.use('/api/body-scan', createBodyScanRouter(services.bodyScanService));
+    app.use('/api/evolution', createEvolutionRouter(services.evolutionService));
 
     // Microservices proxy
     app.use(microservicesProxy);
+
+    // Analytics (visualizations)
+    app.use('/api/analytics', analyticsRouter);
 
     // 404 handler
     app.use((req: Request, res: Response) => {

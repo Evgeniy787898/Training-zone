@@ -16,6 +16,42 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# INFRA-03: Spinner animation for better UX
+SPINNER_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+SPINNER_PID=""
+
+spin() {
+    local msg="${1:-Loading...}"
+    local i=0
+    while true; do
+        printf "\r${YELLOW}${SPINNER_FRAMES[$i]} ${msg}${NC}"
+        i=$(( (i + 1) % ${#SPINNER_FRAMES[@]} ))
+        sleep 0.1
+    done
+}
+
+start_spinner() {
+    local msg="${1:-Loading...}"
+    spin "$msg" &
+    SPINNER_PID=$!
+    disown
+}
+
+stop_spinner() {
+    local success="${1:-true}"
+    local msg="${2:-Done}"
+    if [ -n "$SPINNER_PID" ]; then
+        kill $SPINNER_PID 2>/dev/null || true
+        wait $SPINNER_PID 2>/dev/null || true
+        SPINNER_PID=""
+    fi
+    if [ "$success" = "true" ]; then
+        printf "\r${GREEN}✅ ${msg}${NC}\n"
+    else
+        printf "\r${RED}❌ ${msg}${NC}\n"
+    fi
+}
+
 echo -e "${GREEN}🚀 Starting TZONA V2...${NC}\n"
 
 # ==========================================
@@ -88,6 +124,11 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
+# Load root .env variables
+set -a
+source .env
+set +a
+
 # ==========================================
 # 2. Start Ngrok
 # ==========================================
@@ -114,8 +155,8 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-# Wait for Ngrok URL
-echo -e "${YELLOW}⏳ Waiting for ngrok URL...${NC}"
+# Wait for Ngrok URL with spinner
+start_spinner "Waiting for ngrok URL..."
 NGROK_URL=""
 for i in {1..30}; do
     sleep 1
@@ -123,7 +164,7 @@ for i in {1..30}; do
     NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | python3 -c "import sys, json; tunnels=json.load(sys.stdin).get('tunnels', []); print(tunnels[0]['public_url'] if tunnels else '')" 2>/dev/null || true)
     
     if [ -n "$NGROK_URL" ]; then
-        echo -e "${GREEN}✅ Ngrok active: ${BLUE}$NGROK_URL${NC}"
+        stop_spinner true "Ngrok active: $NGROK_URL"
         break
     fi
 done
@@ -139,11 +180,9 @@ fi
 # ==========================================
 echo -e "${YELLOW}🔧 Injecting environment variables...${NC}"
 
-# Load root .env variables to export them
-set -a
-source .env
-set +a
+# Environment variables should be loaded by now
 
+# Validate required environment variables
 # Validate required environment variables
 validate_env() {
     local missing=()
@@ -151,6 +190,20 @@ validate_env() {
     [ -z "$DATABASE_URL" ] && missing+=("DATABASE_URL")
     [ -z "$TELEGRAM_BOT_TOKEN" ] && missing+=("TELEGRAM_BOT_TOKEN")
     [ -z "$JWT_SECRET" ] && missing+=("JWT_SECRET")
+    
+    # Supabase Checks
+    [ -z "$SUPABASE_URL" ] && missing+=("SUPABASE_URL")
+    [ -z "$SUPABASE_ANON_KEY" ] && missing+=("SUPABASE_ANON_KEY")
+    [ -z "$SUPABASE_SERVICE_KEY" ] && missing+=("SUPABASE_SERVICE_KEY")
+    [ -z "$DIRECT_URL" ] && missing+=("DIRECT_URL")
+
+    # AI Service Checks
+    if [ "${AI_ADVISOR_ENABLED:-true}" = "true" ]; then
+        # Check if at least one provider key is present
+        if [ -z "$OPENAI_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
+             missing+=("AI_ADVISOR_ENABLED is true, but no AI API key (OPENAI/ANTHROPIC/GEMINI) found")
+        fi
+    fi
     
     if [ ${#missing[@]} -gt 0 ]; then
         echo -e "${RED}❌ Missing required environment variables:${NC}"
@@ -206,6 +259,17 @@ echo -e "${GREEN}🔥 Launching all services...${NC}"
 echo -e "${YELLOW}🐘 Checking database services...${NC}"
 docker-compose -p tzona up -d postgres redis
 
+# Wait for database to be ready
+echo -e "${YELLOW}⏳ Waiting for database to be ready...${NC}"
+sleep 3
+
+# DB-001: Run pending migrations automatically
+echo -e "${YELLOW}🔄 Running database migrations...${NC}"
+cd backend
+npx prisma migrate deploy 2>&1 | head -10 || echo -e "${YELLOW}⚠️ Migration check completed (may have warnings)${NC}"
+cd ..
+echo -e "${GREEN}✅ Database migrations applied${NC}"
+
 # Ensure logs directory exists
 mkdir -p logs
 
@@ -213,23 +277,51 @@ mkdir -p logs
 CMD_BACKEND="npm run dev"
 CMD_FRONTEND="npm run dev --prefix ../frontend"
 
-# Check if venvs exist, if not warn (we don't auto-create to avoid complex logic here, user should setup)
-check_venv() {
-    if [ ! -d "$1/.venv" ]; then
-        echo -e "${YELLOW}⚠️  Virtual environment not found in $1. Service might fail.${NC}"
-        echo -e "${YELLOW}👉 Run 'python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt' in $1${NC}"
+# Auto-create venv and install dependencies if missing (CFG-001, INFRA-01, INFRA-02)
+ensure_venv() {
+    local service_path="$1"
+    local service_name=$(basename "$service_path")
+    
+    if [ ! -d "$service_path/.venv" ]; then
+        echo -e "${YELLOW}📦 Creating virtual environment for $service_name...${NC}"
+        python3 -m venv "$service_path/.venv"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}❌ Failed to create venv for $service_name${NC}"
+            return 1
+        fi
+        echo -e "${GREEN}✅ venv created for $service_name${NC}"
     fi
+    
+    # Check if requirements need to be installed (marker file)
+    local marker="$service_path/.venv/.deps_installed"
+    local requirements="$service_path/requirements.txt"
+    
+    if [ -f "$requirements" ]; then
+        if [ ! -f "$marker" ] || [ "$requirements" -nt "$marker" ]; then
+            echo -e "${YELLOW}📦 Installing dependencies for $service_name...${NC}"
+            "$service_path/.venv/bin/pip" install -q -r "$requirements"
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}❌ Failed to install dependencies for $service_name${NC}"
+                return 1
+            fi
+            touch "$marker"
+            echo -e "${GREEN}✅ Dependencies installed for $service_name${NC}"
+        fi
+    fi
+    
+    return 0
 }
 
-check_venv "services/image-processor"
-check_venv "services/ai-advisor"
-check_venv "services/analytics"
+ensure_venv "services/image-processor"
+ensure_venv "services/ai-advisor"
+ensure_venv "services/analytics"
 
 # Python commands (assuming standard venv structure)
 # Explicitly set PORT to override .env value (which is 3001 for backend)
 CMD_IMG="cd ../services/image-processor && PORT=3002 .venv/bin/python3 main.py"
 CMD_AI="cd ../services/ai-advisor && PORT=3003 .venv/bin/python3 main.py"
 CMD_ANALYTICS="cd ../services/analytics && PORT=3004 .venv/bin/python3 main.py"
+CMD_BOT="npm run dev:bot"
 
 # ==========================================
 # 5. Background Healthcheck
@@ -237,41 +329,70 @@ CMD_ANALYTICS="cd ../services/analytics && PORT=3004 .venv/bin/python3 main.py"
 healthcheck_services() {
     echo -e "\n${YELLOW}⏳ Waiting for services to be ready...${NC}"
     
-    local max_attempts=30
+    local max_attempts=60
     local attempt=0
-    local backend_ready=false
-    local frontend_ready=false
     
     while [ $attempt -lt $max_attempts ]; do
         sleep 2
         attempt=$((attempt + 1))
         
-        # Check backend health
-        if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
-            backend_ready=true
+        local all_ready=true
+
+        # 1. Backend
+        if ! curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
+            all_ready=false
         fi
         
-        # Check frontend (vite dev server)
-        if curl -s http://localhost:3000 > /dev/null 2>&1; then
-            frontend_ready=true
+        # 2. Frontend
+        if ! curl -s http://localhost:3000 > /dev/null 2>&1; then
+            all_ready=false
+        fi
+
+        # 3. Image Processor (if enabled)
+        if [ "${IMAGE_PROCESSOR_ENABLED:-true}" = "true" ]; then
+             if ! curl -s http://localhost:3002/api/health > /dev/null 2>&1; then
+                all_ready=false
+             fi
+        fi
+
+        # 4. AI Advisor (if enabled)
+        if [ "${AI_ADVISOR_ENABLED:-true}" = "true" ]; then
+             if ! curl -s http://localhost:3003/api/health > /dev/null 2>&1; then
+                all_ready=false
+             fi
+        fi
+
+        # 5. Analytics (if enabled)
+        if [ "${ANALYTICS_ENABLED:-true}" = "true" ]; then
+             if ! curl -s http://localhost:3004/api/health > /dev/null 2>&1; then
+                all_ready=false
+             fi
         fi
         
-        if [ "$backend_ready" = true ] && [ "$frontend_ready" = true ]; then
+        if [ "$all_ready" = true ]; then
             echo -e "\n${GREEN}═══════════════════════════════════════════════════════════${NC}"
             echo -e "${GREEN}✅ ALL SERVICES READY!${NC}"
             echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
             echo -e "${BLUE}📱 Telegram WebApp: ${NC}$NGROK_URL"
             echo -e "${BLUE}🌐 Frontend:        ${NC}http://localhost:3000"
             echo -e "${BLUE}🔧 Backend API:     ${NC}http://localhost:3001/api"
-            echo -e "${BLUE}🖼️  Image Processor: ${NC}http://localhost:3002"
-            echo -e "${BLUE}🤖 AI Advisor:      ${NC}http://localhost:3003"
-            echo -e "${BLUE}📊 Analytics:       ${NC}http://localhost:3004"
+            
+            if [ "${IMAGE_PROCESSOR_ENABLED:-true}" = "true" ]; then
+                echo -e "${BLUE}🖼️  Image Processor: ${NC}http://localhost:3002"
+            fi
+            if [ "${AI_ADVISOR_ENABLED:-true}" = "true" ]; then
+                echo -e "${BLUE}🤖 AI Advisor:      ${NC}http://localhost:3003"
+            fi
+            if [ "${ANALYTICS_ENABLED:-true}" = "true" ]; then
+                echo -e "${BLUE}📊 Analytics:       ${NC}http://localhost:3004"
+            fi
+            
             echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}\n"
             return 0
         fi
     done
     
-    echo -e "${YELLOW}⚠️  Some services may still be starting...${NC}"
+    echo -e "${YELLOW}⚠️  Some services may still be starting... Check logs/ for details.${NC}"
     return 1
 }
 
@@ -281,12 +402,13 @@ healthcheck_services() {
 # Run concurrently from backend (where it's installed)
 cd backend
 npx concurrently \
-    -n "BACKEND,FRONTEND,IMG-PROC,AI-ADV,ANALYTICS" \
-    -c "blue,green,magenta,cyan,yellow" \
+    -n "BACKEND,FRONTEND,IMG-PROC,AI-ADV,ANALYTICS,BOT" \
+    -c "blue,green,magenta,cyan,yellow,white" \
     --kill-others \
     --restart-tries 3 \
     "$CMD_BACKEND" \
     "$CMD_FRONTEND" \
     "$CMD_IMG" \
     "$CMD_AI" \
-    "$CMD_ANALYTICS"
+    "$CMD_ANALYTICS" \
+    "$CMD_BOT"

@@ -2,6 +2,7 @@ import { createApp as createClientApp, createSSRApp, type App as VueApp } from '
 import { createPinia, type Pinia } from 'pinia';
 import App from '@/App.vue';
 import { createAppRouter } from '@/router';
+import Tres from '@tresjs/core';
 import '@/style.css';
 
 type CreateAppResult = {
@@ -21,6 +22,7 @@ export const createApplication = (ssr = false, initialState?: Record<string, any
 
     app.use(pinia);
     app.use(router);
+    app.use(Tres as any);
 
     // Global Error Handler
     app.config.errorHandler = (err, _instance, info) => {

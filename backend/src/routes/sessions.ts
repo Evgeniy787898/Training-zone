@@ -60,6 +60,30 @@ export function createSessionsRouter(sessionService: SessionService) {
         }
     });
 
+    // GET /api/sessions/previous - Get most recent session before given date (GAP-002)
+    router.get('/previous', validateRequest({ query: sessionsDateQuerySchema }), async (req: Request, res: Response, next) => {
+        try {
+            if (!req.profileId) {
+                return respondAuthRequired(req, res);
+            }
+
+            const { date } = (req.validated?.query as SessionsDateQuery | undefined) ?? {};
+            const { session } = await sessionService.getPreviousSession(req.profileId, date);
+
+            return respondWithSuccess<SessionSingleResponse>(
+                res,
+                { session: session as SessionSingleResponse['session'] },
+                { meta: buildRequestMeta(req) }
+            );
+        } catch (error) {
+            console.error('[sessions/previous] Unexpected error:', error);
+            if (error instanceof AppError) {
+                return respondWithAppError(res, error, { traceId: req.traceId });
+            }
+            next(error);
+        }
+    });
+
     // GET /api/sessions/week
     router.get('/week', validateRequest({ query: sessionsDateQuerySchema }), async (req: Request, res: Response, next) => {
         let fallbackWeekStart: Date | null = null;
@@ -101,6 +125,50 @@ export function createSessionsRouter(sessionService: SessionService) {
         }
     });
 
+    // POST /api/sessions/week/reset (WEEK-F02)
+    // Delete all future/draft sessions for the current week and regenerate from program
+    router.post('/week/reset', validateRequest({ query: sessionsDateQuerySchema }), async (req: Request, res: Response, next) => {
+        try {
+            if (!req.profileId) {
+                return respondAuthRequired(req, res);
+            }
+
+            const { date } = (req.validated?.query as SessionsDateQuery | undefined) ?? {};
+
+            // Get current week bounds
+            const targetDate = date ? parseISO(date) : new Date();
+            const weekStart = startOfWeek(targetDate, { weekStartsOn: 1 });
+            const weekEnd = addDays(weekStart, 6);
+
+            // Delete incomplete sessions for this week
+            const deleted = await sessionService.deleteWeekDraftSessions(
+                req.profileId,
+                format(weekStart, 'yyyy-MM-dd'),
+                format(weekEnd, 'yyyy-MM-dd')
+            );
+
+            // Regenerate sessions from user's active program (if exists)
+            const regenerated = await sessionService.regenerateWeekFromProgram(
+                req.profileId,
+                format(weekStart, 'yyyy-MM-dd')
+            );
+
+            return respondWithSuccess(res, {
+                message: 'Неделя сброшена к исходному плану',
+                deleted: deleted,
+                regenerated: regenerated,
+                week_start: format(weekStart, 'yyyy-MM-dd'),
+                week_end: format(weekEnd, 'yyyy-MM-dd'),
+            }, { meta: buildRequestMeta(req) });
+        } catch (error) {
+            console.error('[sessions/week/reset] Error:', error);
+            if (error instanceof AppError) {
+                return respondWithAppError(res, error, { traceId: req.traceId });
+            }
+            next(error);
+        }
+    });
+
     // GET /api/sessions/:id
     router.get('/:id', validateRequest({ params: sessionIdParamsSchema }), async (req: Request, res: Response, next) => {
         try {
@@ -125,6 +193,27 @@ export function createSessionsRouter(sessionService: SessionService) {
 
             const payload: SessionSingleResponse = { session: session as SessionSingleResponse['session'] };
             return respondWithSuccess<SessionSingleResponse>(res, payload, { meta: buildRequestMeta(req) });
+        } catch (error) {
+            if (error instanceof AppError) {
+                return respondWithAppError(res, error, { traceId: req.traceId });
+            }
+            next(error);
+        }
+    });
+
+    // GET /api/sessions/history
+    router.get('/history', async (req: Request, res: Response, next) => {
+        try {
+            if (!req.profileId) {
+                return respondAuthRequired(req, res);
+            }
+
+            const page = Number(req.query.page) || 1;
+            const pageSize = Number(req.query.pageSize) || 20;
+
+            const result = await sessionService.getHistory(req.profileId, page, pageSize);
+
+            return respondWithSuccess(res, result, { meta: buildRequestMeta(req) });
         } catch (error) {
             if (error instanceof AppError) {
                 return respondWithAppError(res, error, { traceId: req.traceId });

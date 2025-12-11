@@ -8,14 +8,11 @@
     @update:modelValue="handleVisibilityChange"
     @close="emit('close')"
   >
-    <LoadingState
+    <AiLoadingState
       v-if="loading"
       class="advice-modal__loading"
-      title="Загружаю рекомендации…"
-      description="Готовим идеи под выбранный день"
-      :skeleton-count="2"
-      :skeleton-lines="3"
-      inline
+      title="Связываемся с AI..."
+      :steps="steps"
     />
 
     <div v-else-if="advice" class="advice-modal__content">
@@ -40,8 +37,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { cachedApiClient as apiClient } from '@/services/cachedApi';
-import LoadingState from '@/modules/shared/components/LoadingState.vue';
 import ModalDialog from '@/modules/shared/components/ModalDialog.vue';
+import AiLoadingState, { AiStep } from '@/modules/shared/components/AiLoadingState.vue';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -54,6 +51,24 @@ const emit = defineEmits<{
 
 const loading = ref(false);
 const advice = ref<any>(null);
+const error = ref<string | null>(null);
+const steps = ref<AiStep[]>([]);
+
+const initSteps = () => {
+    steps.value = [
+    { id: 'req', label: 'Анализируем контекст...', status: 'pending' },
+    { id: 'pers', label: 'Применяем настройки...', status: 'pending' },
+    { id: 'gen', label: 'Генерируем совет...', status: 'pending' }
+  ];
+};
+
+const updateStep = (id: string, status: 'active' | 'done', label?: string) => {
+    const step = steps.value.find(s => s.id === id);
+    if (step) {
+        step.status = status;
+        if (label) step.label = label;
+    }
+}
 
 const handleVisibilityChange = (value: boolean) => {
   if (!value) {
@@ -65,11 +80,34 @@ const loadAdvice = async () => {
   if (!props.isOpen) return;
   
   loading.value = true;
+  error.value = null;
+  advice.value = null;
+  initSteps();
+  
+  // Set first step active
+  updateStep('req', 'active');
+
   try {
     const date = props.date || new Date().toISOString().split('T')[0];
-    advice.value = await apiClient.getDailyAdvice(date);
-  } catch (error) {
-    console.error('Failed to load advice:', error);
+    
+    // Simulate steps for UX
+    const t1 = setTimeout(() => { updateStep('req', 'done'); updateStep('pers', 'active'); }, 600);
+    const t2 = setTimeout(() => { updateStep('pers', 'done'); updateStep('gen', 'active'); }, 1200);
+
+    const result = await apiClient.getDailyAdvice(date);
+    
+    clearTimeout(t1);
+    clearTimeout(t2);
+    
+    // Complete all
+    updateStep('req', 'done');
+    updateStep('pers', 'done');
+    updateStep('gen', 'done');
+    
+    advice.value = result;
+  } catch (err: any) {
+    console.error('Failed to load advice:', err);
+    error.value = 'Не удалось загрузить совет';
   } finally {
     loading.value = false;
   }
@@ -81,8 +119,9 @@ watch(
     if (newVal) {
       loadAdvice();
     } else {
-      advice.value = null;
       loading.value = false;
+      error.value = null;
+      advice.value = null;
     }
   }
 );

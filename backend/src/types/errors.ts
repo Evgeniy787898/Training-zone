@@ -29,6 +29,7 @@ export const ERROR_CODES = {
     NOT_FOUND: 'not_found',
     PAYLOAD_TOO_LARGE: 'payload_too_large',
     PIN_LOCKED: 'pin_locked',
+    INVALID_PIN: 'invalid_pin',
     PROFILE_NOT_FOUND: 'profile_not_found',
     REPORT_NOT_AVAILABLE: 'report_not_available',
     REQUEST_TIMEOUT: 'request_timeout',
@@ -43,6 +44,11 @@ export const ERROR_CODES = {
     MICROSERVICE_EMPTY_RESPONSE: 'microservice_empty_response',
     MICROSERVICE_TIMEOUT: 'microservice_timeout',
     MICROSERVICE_NETWORK_ERROR: 'microservice_network_error',
+    STORAGE_UPLOAD_FAILED: 'storage_upload_failed',
+    INVALID_TOKEN: 'invalid_token',
+    TOKEN_REVOKED: 'token_revoked',
+    TOKEN_EXPIRED: 'token_expired',
+    FAVORITES_ERROR: 'favorites_error',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

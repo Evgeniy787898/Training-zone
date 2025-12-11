@@ -37,8 +37,30 @@ model Profile {
   dailyAdviceSelections    DailyAdviceSelection[]
   exerciseProgress         ExerciseProgress[]
   operationLogs            OperationLog[]
+  progressPhotos           ProgressPhoto[]
+  bodyScanSessions         BodyScanSession[]
+  workoutLogs              WorkoutAuditLog[]
+  refreshTokens            RefreshToken[]
+  sensitiveAuditLogs       SensitiveAuditLog[]
+  favoriteExercises        FavoriteExercise[]
+  evolution360Scans        Evolution360Scan[]
 
   @@map("profiles")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  token     String   @unique @db.VarChar(512)
+  profileId String   @map("profile_id") @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at")
+  revoked   Boolean  @default(false)
+  
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId], map: "refresh_tokens_profile_id_idx")
+  @@index([token], map: "refresh_tokens_token_idx")
+  @@map("refresh_tokens")
 }
 
 model TrainingSession {
@@ -332,6 +354,7 @@ model Exercise {
   focus       String?
   description String?
   cue         String?
+  equipment   String[] @default([])
   programId   String?  @map("program_id") @db.Uuid
   iconUrl     String?  @map("icon_url")
   iconUrlHover String? @map("icon_url_hover")
@@ -410,4 +433,130 @@ enum TrainingSessionStatus {
   in_progress
   done
   skipped
+}
+
+model ProgressPhoto {
+  id         String   @id @default(uuid()) @db.Uuid
+  profileId  String   @map("profile_id") @db.Uuid
+  imageUrl   String   @map("image_url")
+  thumbnail  String?
+  capturedAt DateTime @default(now()) @map("captured_at")
+  note       String?  @db.VarChar(500)
+  weightKg   Float?   @map("weight_kg")
+  bodyFat    Float?   @map("body_fat")
+  
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, capturedAt], map: "progress_photos_profile_id_captured_at_idx")
+  @@map("progress_photos")
+}
+
+model BodyScanSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  profileId  String   @map("profile_id") @db.Uuid
+  
+  frontImageUrl String @map("front_image_url")
+  backImageUrl  String @map("back_image_url")
+  leftImageUrl  String @map("left_image_url")
+  rightImageUrl String @map("right_image_url")
+
+  heightCm   Float    @map("height_cm")
+  weightKg   Float    @map("weight_kg")
+  bodyFat    Float?   @map("body_fat")
+  
+  analysis   Json?    @map("analysis") // Stores AI insights (body type, posture, estimated fat)
+  
+  scannedAt  DateTime @default(now()) @map("scanned_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, scannedAt])
+  @@map("body_scan_sessions")
+}
+
+model WorkoutAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  profileId   String   @map("profile_id") @db.Uuid
+  entityType  String   @map("entity_type") @db.VarChar(32) // 'TrainingSession', 'ExerciseProgress'
+  entityId    String   @map("entity_id") @db.Uuid
+  action      String   @db.VarChar(16) // 'CREATE', 'UPDATE', 'DELETE'
+  
+  // Store the FULL state of the object BEFORE the change (for rollback)
+  previousState Json?  @map("previous_state")
+  
+  // Store the changeset or new state
+  newState      Json?  @map("new_state")
+  
+  changedAt   DateTime @default(now()) @map("changed_at")
+  
+  profile     Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, entityId])
+  @@index([changedAt])
+  @@map("workout_audit_log")
+}
+
+model SensitiveAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  profileId   String?  @map("profile_id") @db.Uuid
+  event       String   @db.VarChar(64) // e.g., 'PIN_CHANGE', 'LOGIN_SUCCESS', 'LOGIN_FAILURE', 'PROFILE_UPDATE'
+  status      String   @db.VarChar(32) // 'SUCCESS', 'FAILURE'
+  ip          String?  @db.Inet
+  userAgent   String?  @map("user_agent")
+  metadata    Json?    @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  profile     Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([profileId, event, createdAt(sort: Desc)], map: "sensitive_audit_log_profile_event_idx")
+  @@index([event, createdAt(sort: Desc)], map: "sensitive_audit_log_event_idx")
+  @@map("sensitive_audit_log")
+}
+
+model FavoriteExercise {
+  id          String   @id @default(uuid()) @db.Uuid
+  profileId   String   @map("profile_id") @db.Uuid
+  exerciseKey String   @map("exercise_key") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  profile     Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, exerciseKey], map: "favorite_exercises_profile_exercise_key")
+  @@index([profileId], map: "favorite_exercises_profile_id_idx")
+  @@map("favorite_exercises")
+}
+
+model Evolution360Scan {
+  id           String   @id @default(uuid()) @db.Uuid
+  profileId    String   @map("profile_id") @db.Uuid
+  scanType     String   @map("scan_type") @db.VarChar(16)  // 'current' | 'goal'
+  frameCount   Int      @map("frame_count")
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  profile      Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  frames       Evolution360Frame[]
+
+  @@unique([profileId, scanType], map: "evolution_360_scans_profile_type_key")
+  @@index([profileId, scanType], map: "evolution_360_scans_profile_type_idx")
+  @@map("evolution_360_scans")
+}
+
+model Evolution360Frame {
+  id           String   @id @default(uuid()) @db.Uuid
+  scanId       String   @map("scan_id") @db.Uuid
+  frameIndex   Int      @map("frame_index")
+  imageUrl     String   @map("image_url")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  scan         Evolution360Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@unique([scanId, frameIndex], map: "evolution_360_frames_scan_frame_key")
+  @@index([scanId], map: "evolution_360_frames_scan_id_idx")
+  @@map("evolution_360_frames")
 }

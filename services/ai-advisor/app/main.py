@@ -108,7 +108,53 @@ health_reporter.register("config", _config_health)
 health_reporter.register("promptTemplate", _prompt_template_health)
 health_reporter.register("providerCredentials", _provider_credentials_health)
 
-# Initialize advice generator
+
+async def _llm_connectivity_health() -> HealthCheckResult:
+    """Check LLM provider connectivity with a minimal test request (AI-I01)."""
+    import time
+    try:
+        # Lazy import to avoid circular dependencies
+        from providers import create_provider, ProviderConfig, ProviderAPIError
+        
+        start = time.time()
+        provider_config = ProviderConfig(
+            model=config.model,
+            temperature=0.1,
+            max_output_tokens=10,  # Minimal tokens for quick test
+            api_key=config.get_api_key(),
+        )
+        provider = create_provider(config.provider, provider_config, logger)
+        
+        # Lightweight test prompt
+        result = provider.generate(
+            system_prompt="You are a test assistant.",
+            user_prompt="Say 'ok'"
+        )
+        latency_ms = round((time.time() - start) * 1000)
+        
+        if result.text:
+            return HealthCheckResult.ok(
+                provider=config.provider,
+                model=config.model,
+                latencyMs=latency_ms,
+                responsePreview=result.text[:20] if result.text else ""
+            )
+        return HealthCheckResult.degraded(reason="Empty response from LLM")
+    except ProviderAPIError as e:
+        return HealthCheckResult.error(
+            provider=config.provider,
+            code=e.code,
+            message=str(e),
+            retryable=e.retryable
+        )
+    except Exception as e:
+        return HealthCheckResult.error(
+            provider=config.provider,
+            error=str(e)
+        )
+
+
+health_reporter.register("llmConnectivity", _llm_connectivity_health)
 advice_generator = AdviceGenerator(logger)
 
 # Set global instances for routes
@@ -131,6 +177,13 @@ async def metrics_endpoint():
     return metrics_recorder.snapshot()
 
 
+@app.get("/api/usage")
+async def usage_endpoint():
+    """Usage statistics endpoint (COST-003)."""
+    from app.services.usage_tracker import usage_tracker
+    return usage_tracker.get_summary()
+
+
 @shutdown_manager.callback
 def _log_shutdown_metrics() -> None:
     """Log metrics on shutdown."""
@@ -140,4 +193,11 @@ def _log_shutdown_metrics() -> None:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=config.host, port=config.port)
+    is_dev = config.environment in ("development", "dev", "local")
+    uvicorn.run(
+        "main:app" if is_dev else app,
+        host=config.host,
+        port=config.port,
+        reload=is_dev,
+    )
+

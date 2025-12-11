@@ -428,12 +428,14 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 // Кэширующий API клиент
-export const cachedApiClient: ApiClient & {
+type CachedApiClient = ApiClient & {
     verifyPin: (pin: string) => Promise<PinVerificationResponse>;
     clearCache: () => void;
     invalidateCache: (keys: string | string[]) => void;
     refreshAssistantSessionState: () => Promise<{ state: AssistantSessionState; updatedAt: string | null; expiresAt: string | null }>;
-} = {
+};
+
+export const cachedApiClient = {
     // Auth
     verifyPin: apiClient.verifyPin,
 
@@ -457,6 +459,13 @@ export const cachedApiClient: ApiClient & {
     getThemePalette: () => apiClient.getThemePalette(),
     updateThemePalette: async (palette) => {
         const data = await apiClient.updateThemePalette(palette);
+        apiCache.clear();
+        return data;
+    },
+    changePin: apiClient.changePin,
+    clearServerCache: async () => {
+        const data = await apiClient.clearServerCache();
+        // Also clear local cache to ensure sync
         apiCache.clear();
         return data;
     },
@@ -523,33 +532,37 @@ export const cachedApiClient: ApiClient & {
             ? params.fields.slice().sort().join(',')
             : 'all';
         const cacheKey = `achievements_${page}_${pageSize}_${fieldsKey} `;
-        const cached = apiCache.get<AchievementResponse>(cacheKey);
-        if (cached) return cached;
 
-        const data = await apiClient.getAchievements({ ...params, page, pageSize });
-        apiCache.set<AchievementResponse>(cacheKey, data, 5 * 60 * 1000); // 5 минут
-        return data;
+        return apiCache.getWithBackgroundRefresh<AchievementResponse>(
+            cacheKey,
+            () => apiClient.getAchievements({ ...params, page, pageSize }),
+            5 * 60 * 1000,
+            true, // persistent
+            24 * 60 * 60 * 1000 // 24h stale
+        );
     },
 
     // Exercises
     getExerciseCatalog: async () => {
         const cacheKey = 'exerciseCatalog';
-        const cached = apiCache.get<{ items: ExerciseCatalogItem[] } | ExerciseCatalogItem[]>(cacheKey);
-        if (cached) return cached;
-
-        const data = await apiClient.getExerciseCatalog();
-        apiCache.set<{ items: ExerciseCatalogItem[] } | ExerciseCatalogItem[]>(cacheKey, data, 10 * 60 * 1000); // 10 минут
-        return data;
+        return apiCache.getWithBackgroundRefresh<{ items: ExerciseCatalogItem[] } | ExerciseCatalogItem[]>(
+            cacheKey,
+            () => apiClient.getExerciseCatalog(),
+            10 * 60 * 1000,
+            true, // persistent
+            24 * 60 * 60 * 1000 // 24h stale
+        );
     },
 
     getExerciseHistory: async (exerciseKey: string) => {
         const cacheKey = `exerciseHistory_${exerciseKey} `;
-        const cached = apiCache.get<{ items: ExerciseHistoryItem[] } | ExerciseHistoryItem[]>(cacheKey);
-        if (cached) return cached;
-
-        const data = await apiClient.getExerciseHistory(exerciseKey);
-        apiCache.set<{ items: ExerciseHistoryItem[] } | ExerciseHistoryItem[]>(cacheKey, data, 5 * 60 * 1000); // 5 минут
-        return data;
+        return apiCache.getWithBackgroundRefresh<{ items: ExerciseHistoryItem[] } | ExerciseHistoryItem[]>(
+            cacheKey,
+            () => apiClient.getExerciseHistory(exerciseKey),
+            5 * 60 * 1000,
+            true, // persistent
+            24 * 60 * 60 * 1000 // 24h stale
+        );
     },
 
     getExerciseLevels: async (exerciseKey: string) => {
@@ -731,4 +744,4 @@ export const cachedApiClient: ApiClient & {
             apiCache.delete(key);
         });
     },
-};
+} as CachedApiClient;

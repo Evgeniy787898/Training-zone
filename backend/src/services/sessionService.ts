@@ -79,8 +79,13 @@ const buildSessionNotFoundError = () =>
  * structured-note handling, ownership checks, and cache invalidation regardless
  * of which transport (HTTP, Supabase sync, background worker) invokes it.
  */
+import type { HistoryService } from './historyService.js';
+
 export class SessionService {
-    constructor(private readonly repository: SessionRepository) { }
+    constructor(
+        private readonly repository: SessionRepository,
+        private readonly historyService: HistoryService,
+    ) { }
 
     async getSessionForDay(profileId: string, date?: string) {
         const targetDate = date ? parseISO(date) : new Date();
@@ -255,6 +260,15 @@ export class SessionService {
             session.id,
             { ...updates, ...withPlanned },
             { ...updates, ...(plannedTimestamp ? withDateOnly : {}) },
+        );
+
+        await this.historyService.logChange(
+            profileId,
+            'TrainingSession',
+            sessionId,
+            'UPDATE',
+            session,
+            updatedSession
         );
 
         if (structuredNotes) {

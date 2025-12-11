@@ -1,855 +1,707 @@
 <template>
-  <div class="page-shell settings-page">
-    <SectionHeading
-      as="h1"
-      title="Настройки"
-      description="Контролируй стабильность сервиса, очищай кэш и сохраняй быстрые заметки ассистента."
-      eyebrow="Управление"
-    >
-      <template #icon>
-        <AppIcon class="page-title__icon" name="settings" variant="aqua" :size="30" />
-      </template>
-    </SectionHeading>
-
-    <BaseCard class="settings-card settings-card--program section-surface">
-      <template #header>
-        <div class="surface-card__header-content">
-          <div class="surface-card__title">
-            <NeonIcon name="dumbbell" variant="lime" :size="26" class="settings-card__title-icon" />
-            <span>Программа тренировок</span>
-          </div>
-          <span class="badge" :class="programSourceBadgeClass">
-            {{ programSourceBadgeLabel }}
-          </span>
-        </div>
-        <p class="surface-card__subtitle">
-          Синхронизированная программа помогает Today и отчётам подгружать упражнения без задержек.
-        </p>
-      </template>
-
-      <LoadingState
-        v-if="programLoadingState"
-        class="settings-card__loader"
-        title="Синхронизирую программу…"
-        description="Подтягиваем текущий план и уровни упражнений"
-        :skeleton-count="2"
-        :skeleton-lines="3"
-        inline
-      />
-
-      <div v-else-if="userProgramValue" class="settings-program">
-        <dl class="settings-program__details">
-          <div>
-            <dt>Программа</dt>
-            <dd>{{ userProgramValue.program?.title || userProgramValue.program?.name || 'Без названия' }}</dd>
-          </div>
-          <div>
-            <dt>Направление</dt>
-            <dd>{{ userProgramValue.discipline?.name || 'Не выбрано' }}</dd>
-          </div>
-          <div>
-            <dt>Выбрана</dt>
-            <dd>{{ programSelectedAtLabel }}</dd>
-          </div>
-        </dl>
-        <p v-if="programSourceHint" class="settings-program__hint" role="status">
-          {{ programSourceHint }}
-        </p>
-      </div>
-
-      <div v-else class="empty-state empty-state--inline">
-        <AppIcon class="empty-state__icon" name="target" variant="emerald" tone="ghost" :size="30" />
-        <div class="empty-state__title">Программа не выбрана</div>
-        <p class="empty-state__description">
-          Открой вкладку «Программы тренировок», чтобы выбрать план и получить рекомендации.
-        </p>
-      </div>
-    </BaseCard>
-
-    <BaseCard class="settings-card settings-card--status section-surface">
-      <template #header>
-        <div class="surface-card__header--split">
-          <div class="surface-card__title">
-            <NeonIcon name="heart" variant="amber" :size="26" class="settings-card__title-icon" />
-            <span>Состояние приложения</span>
-          </div>
-          <div class="surface-card__header-actions">
-            <StatusBadge
-              v-if="overallStatus"
-              :label="statusLabel(overallStatus)"
-              :variant="statusVariant(overallStatus)"
-              size="sm"
-            />
-            <DropdownMenu
-              class="settings-card__dropdown"
-              label="Быстрые действия"
-              icon="spark"
-              :items="healthQuickActions"
-            />
-          </div>
-        </div>
-        <p class="surface-card__subtitle">
-          Следи за ключевыми сервисами и обновляй проверку при изменениях инфраструктуры.
-        </p>
-      </template>
-
-      <LoadingState
-        v-if="healthCheckLoading"
-        class="settings-card__loader"
-        title="Проверяю состояние…"
-        description="Собираем статусы сервисов и кэшей"
-        :skeleton-count="3"
-        :skeleton-lines="2"
-        inline
-      />
-
-      <div v-else-if="healthCheckResult" class="settings-status">
-        <div class="settings-status__summary">
-          <span class="settings-status__indicator" :class="`settings-status__indicator--${healthCheckResult.status}`"></span>
-          <div class="settings-status__summary-text">
-            <h3>Общее состояние</h3>
-            <p>{{ statusHint(overallStatus) }}</p>
-          </div>
-          <span class="settings-status__metric">
-            {{ formatIso(healthCheckResult.timestamp) }}
-          </span>
-        </div>
-
-        <div class="settings-status__grid" role="list">
-          <article
-            v-for="([key, check]) in checkEntries"
-            :key="key"
-            class="settings-status__item"
-            role="listitem"
-          >
-            <header class="settings-status__item-header">
-              <span class="settings-status__item-title">{{ getCheckName(key) }}</span>
-              <StatusBadge
-                :label="statusLabel(check.status)"
-                :variant="statusVariant(check.status)"
-                size="sm"
-              />
-            </header>
-            <p class="settings-status__item-description">{{ statusHint(check.status) }}</p>
-            <dl
-              v-if="getCheckMetrics(check).length"
-              class="settings-status__item-meta"
-            >
-              <div
-                v-for="metric in getCheckMetrics(check)"
-                :key="metric.id"
-                class="settings-status__metric-row"
-              >
-                <dt>{{ metric.label }}</dt>
-                <dd>{{ metric.value }}</dd>
-              </div>
-            </dl>
-            <p v-if="check.error" class="settings-status__error" role="status">
-              {{ check.error }}
-            </p>
-          </article>
-        </div>
-
-        <div v-if="healthCheckResult.recommendations.length" class="settings-status__recommendations">
-          <h4>Рекомендации</h4>
-          <ul class="list-reset settings-status__recommendation-list">
-            <li v-for="(recommendation, index) in healthCheckResult.recommendations" :key="index">
-              <NeonIcon name="info" variant="aqua" :size="18" />
-              <span>{{ recommendation }}</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <div v-else class="empty-state empty-state--inline">
-        <div class="empty-state__icon">⚙️</div>
-        <div class="empty-state__title">Нет данных проверки</div>
-        <p class="empty-state__description">
-          Запусти health-check, чтобы убедиться, что всё работает стабильно.
-        </p>
-      </div>
-
-      <template #footer>
-        <div class="settings-card__actions">
-          <BaseButton
-            variant="primary"
-            @click="runHealthCheck"
-            :loading="healthCheckLoading"
-            loading-text="Проверяю…"
-          >
-            Обновить проверку
-          </BaseButton>
-        </div>
-      </template>
-    </BaseCard>
-
-    <div class="page-grid page-grid--two settings-page__grid">
-      <BaseCard class="settings-card">
-        <template #header>
-          <div class="surface-card__title">
-            <NeonIcon name="chart" variant="lime" :size="26" class="settings-card__title-icon" />
-            <span>Производительность</span>
-          </div>
-          <p class="surface-card__subtitle">
-            Держи под контролем скорость API и рендера интерфейса.
-          </p>
-        </template>
-        
-        <div class="stat-grid">
-          <StatCard
-            label="Среднее время API"
-            :value="formatMetric(performanceMetrics.avgApiResponseTime)"
-            hint="за последнюю сессию"
-            icon="pulse"
-            intent="warning"
-            variant="gradient"
-            accent="warning"
-            tooltip="Среднее время отклика критических эндпоинтов"
-          />
-          <StatCard
-            label="Среднее время рендера"
-            :value="formatMetric(performanceMetrics.avgRenderTime)"
-            hint="интерфейс"
-            icon="spark"
-            tooltip="Средняя скорость отрисовки основного интерфейса"
-          />
-          <StatCard
-            label="Метрик собрано"
-            :value="performanceMetrics.totalMetrics"
-            hint="за сутки"
-            icon="stack"
-            intent="success"
-            tooltip="Количество записанных событий производительности"
-          />
-        </div>
-        
-        <template #footer>
-          <div class="settings-card__actions">
-            <BaseButton variant="ghost" @click="clearPerformanceMetrics">
-              Очистить метрики
-            </BaseButton>
-          </div>
-        </template>
-      </BaseCard>
-
-      <Suspense>
-        <template #default>
-          <AssistantInsightsSection />
-        </template>
-        <template #fallback>
-          <BaseCard class="settings-card settings-card--assistant">
-            <template #header>
-              <div class="surface-card__header--split">
-                <div class="surface-card__title">
-                  <NeonIcon name="spark" variant="violet" :size="26" class="settings-card__title-icon" />
-                  <span>Ассистент и заметки</span>
-                </div>
-                <span class="badge badge--neutral">Загрузка…</span>
-              </div>
-            </template>
-            <LoadingState
-              inline
-              title="Готовим раздел ассистента…"
-              description="Подключаем статистику и заметки"
-              :skeleton-count="3"
-              :skeleton-lines="2"
-            />
-          </BaseCard>
-        </template>
-      </Suspense>
-
-
-      <BaseCard class="settings-card settings-card--cache">
-        <template #header>
-          <div class="surface-card__title">
-            <NeonIcon name="database" variant="violet" :size="26" class="settings-card__title-icon" />
-            <span>Кэш приложения</span>
-          </div>
-          <p class="surface-card__subtitle">
-            Сбрасывай локальные данные, если нужно получить свежие ответы.
-          </p>
-        </template>
-
-        <dl class="settings-cache" aria-live="polite">
-          <div>
-            <dt class="settings-cache__label">Элементов в кэше</dt>
-            <dd class="settings-cache__value">{{ cacheSize }}</dd>
-          </div>
-        </dl>
-        
-        <template #footer>
-          <div class="settings-card__actions">
-            <BaseButton variant="warning" @click="clearCache">
-              Очистить кэш
-            </BaseButton>
-          </div>
-        </template>
-      </BaseCard>
-
+  <div class="settings-page">
+    <!-- Background -->
+    <div class="settings-bg">
+      <div class="settings-bg__grid"></div>
+      <div class="settings-bg__glow settings-bg__glow--1"></div>
+      <div class="settings-bg__glow settings-bg__glow--2"></div>
     </div>
 
-    <BaseCard class="settings-card">
-      <template #header>
-        <div class="surface-card__title">
-          <NeonIcon name="user" variant="aqua" :size="26" class="settings-card__title-icon" />
-          <span>Аккаунт</span>
-        </div>
-        <p class="surface-card__subtitle">
-          Завершай сессию, если нужно выйти из WebApp и обновить авторизацию.
-        </p>
-      </template>
-      
-      <div class="settings-account">
-        <div>
-          <span class="settings-account__title">Выход из аккаунта</span>
-          <span class="settings-account__description">Сессия будет завершена после закрытия приложения в Telegram.</span>
-        </div>
-        <BaseButton variant="danger" @click="logout">
-          Выйти
-        </BaseButton>
+    <!-- Header -->
+    <header class="settings-header">
+      <h1>Настройки</h1>
+      <p>Персонализируй приложение под себя</p>
+    </header>
+
+    <!-- Tabs with smart fades -->
+    <div class="tabs-wrapper">
+      <div 
+        class="tabs-fade tabs-fade--left"
+        :class="{ 'tabs-fade--visible': showTabsFadeLeft }"
+      ></div>
+      <div 
+        class="tabs-track"
+        ref="tabsTrackRef"
+        @scroll="handleTabsScroll"
+      >
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          class="tab-item"
+          :class="{ 'tab-item--active': activeTab === tab.id }"
+          @click="activeTab = tab.id"
+        >
+          <AppIcon :name="tab.icon" variant="accent" tone="ghost" :size="18" />
+          <span>{{ tab.label }}</span>
+        </button>
       </div>
-    </BaseCard>
+      <div 
+        class="tabs-fade tabs-fade--right"
+        :class="{ 'tabs-fade--visible': showTabsFadeRight }"
+      ></div>
+    </div>
+
+    <!-- Content with overlay scroll -->
+    <main class="settings-main" ref="mainRef">
+      <Transition name="fade" mode="out-in">
+        
+        <!-- Profile / Body Params -->
+        <div v-if="activeTab === 'profile'" key="profile" class="panel">
+          <BodyParamsWidget
+            :loading="profileLoading"
+            :body-params="bodyParams"
+            @update="handleBodyParamsUpdate"
+          />
+        </div>
+
+        <!-- Notifications -->
+        <div v-else-if="activeTab === 'notifications'" key="notifications" class="panel">
+          <div class="card">
+            <div class="card-header">
+              <AppIcon name="bell" variant="accent" tone="ghost" :size="26" />
+              <div class="card-header__text">
+                <h2>Уведомления</h2>
+                <span>Напоминания в Telegram</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="setting-item">
+                <div class="setting-item__info">
+                  <span class="setting-item__title">Напоминания включены</span>
+                  <span class="setting-item__desc">Получать уведомления о тренировках</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" v-model="notificationsEnabled" @change="handleNotificationToggle" />
+                  <span></span>
+                </label>
+              </div>
+              <Transition name="slide-down">
+                <div v-if="notificationsEnabled" class="setting-item setting-item--sub">
+                  <div class="setting-item__info">
+                    <span class="setting-item__title">Время напоминания</span>
+                    <span class="setting-item__desc">{{ userTimezone }}</span>
+                  </div>
+                  <input type="time" v-model="notificationTime" class="time-field" @change="handleNotificationTimeChange" />
+                </div>
+              </Transition>
+            </div>
+          </div>
+        </div>
+
+        <!-- Security -->
+        <div v-else-if="activeTab === 'security'" key="security" class="panel">
+          <div class="card">
+            <div class="card-header">
+              <AppIcon name="lock" variant="accent" tone="ghost" :size="26" />
+              <div class="card-header__text">
+                <h2>PIN-код</h2>
+                <span>Защита доступа</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="setting-item">
+                <div class="setting-item__info">
+                  <span class="setting-item__title">Изменить PIN-код</span>
+                  <span class="setting-item__desc">4-6 цифр для входа</span>
+                </div>
+                <button class="action-btn" @click="showPinModal = true">Изменить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <AppIcon name="log-out" variant="accent" tone="ghost" :size="26" />
+              <div class="card-header__text">
+                <h2>Аккаунт</h2>
+                <span>Управление сессией</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="setting-item">
+                <div class="setting-item__info">
+                  <span class="setting-item__title">Выход из аккаунта</span>
+                  <span class="setting-item__desc">Завершить сессию WebApp</span>
+                </div>
+                <button class="action-btn action-btn--danger" @click="handleLogout">Выйти</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Data -->
+        <div v-else-if="activeTab === 'data'" key="data" class="panel">
+          <div class="card">
+            <div class="card-header">
+              <AppIcon name="hard-drive" variant="accent" tone="ghost" :size="26" />
+              <div class="card-header__text">
+                <h2>Локальный кэш</h2>
+                <span>Данные на устройстве</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="stats-grid">
+                <div class="stat-box">
+                  <strong>{{ cacheSize }}</strong>
+                  <span>РАЗМЕР</span>
+                </div>
+                <div class="stat-box">
+                  <strong>{{ cacheItems }}</strong>
+                  <span>ЭЛЕМЕНТОВ</span>
+                </div>
+              </div>
+              <button class="wide-btn wide-btn--warning" @click="clearLocalCache">
+                <AppIcon name="trash-2" variant="warning" tone="ghost" :size="16" />
+                Очистить кэш
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <AppIcon name="cloud" variant="accent" tone="ghost" :size="26" />
+              <div class="card-header__text">
+                <h2>Облачные данные</h2>
+                <span>Синхронизация с сервером</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <p class="info-text">Сброс серверного кэша поможет, если данные рассинхронизировались между устройствами.</p>
+              <button class="wide-btn wide-btn--warning" :disabled="serverLoading" @click="clearServerCache">
+                <AppIcon :name="serverLoading ? 'loader' : 'refresh-cw'" variant="warning" tone="ghost" :size="16" :class="{ spinning: serverLoading }" />
+                {{ serverLoading ? 'Очистка...' : 'Сбросить серверный кэш' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </main>
+
+    <!-- Footer -->
+    <footer class="settings-footer">
+      <span>Training Zone <em>v2.0.0</em></span>
+      <a href="https://t.me/av1242" target="_blank">
+        <AppIcon name="message-circle" variant="muted" tone="ghost" :size="14" />
+        Поддержка
+      </a>
+    </footer>
+
+    <!-- PIN Modal -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="showPinModal" class="modal-overlay" @click.self="closePinModal">
+          <div class="modal-box">
+            <header>
+              <h3>Смена PIN-кода</h3>
+              <button @click="closePinModal"><AppIcon name="x" tone="ghost" :size="18" /></button>
+            </header>
+            <form @submit.prevent="handlePinChange">
+              <label>Текущий PIN<input type="password" inputmode="numeric" maxlength="6" v-model="pinForm.current" placeholder="••••" required /></label>
+              <label>Новый PIN<input type="password" inputmode="numeric" maxlength="6" v-model="pinForm.new" placeholder="••••" required /></label>
+              <label>Подтвердите<input type="password" inputmode="numeric" maxlength="6" v-model="pinForm.confirm" placeholder="••••" required /></label>
+              <p v-if="pinError" class="error-msg">{{ pinError }}</p>
+              <div class="modal-actions">
+                <button type="button" class="action-btn" @click="closePinModal">Отмена</button>
+                <button type="submit" class="action-btn action-btn--primary" :disabled="pinLoading">{{ pinLoading ? 'Сохраняю...' : 'Сохранить' }}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, defineAsyncComponent } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useAppStore } from '@/stores/app';
+import { apiClient } from '@/services/api';
 import { clearAllCaches, invalidateProgramContextCaches } from '@/services/cacheManager';
-import NeonIcon from '@/modules/shared/components/NeonIcon.vue';
+import { cachedApiClient } from '@/services/cachedApi';
 import AppIcon from '@/modules/shared/components/AppIcon.vue';
-import LoadingState from '@/modules/shared/components/LoadingState.vue';
-import SectionHeading from '@/modules/shared/components/SectionHeading.vue';
-import StatCard from '@/modules/shared/components/StatCard.vue';
-import StatusBadge from '@/modules/shared/components/StatusBadge.vue';
-import DropdownMenu, { type DropdownItem } from '@/modules/shared/components/DropdownMenu.vue';
-import BaseButton from '@/components/ui/BaseButton.vue';
-import BaseCard from '@/components/ui/BaseCard.vue';
-import type { HealthCheckResult } from '@/services/healthCheck';
-const AssistantInsightsSection = defineAsyncComponent({
-  loader: () => import('@/modules/settings/components/AssistantInsightsSection.vue'),
-  suspensible: true,
-});
+import BodyParamsWidget from '@/modules/settings/widgets/BodyParamsWidget.vue';
 
 const appStore = useAppStore();
-const router = useRouter();
-type PerformanceMonitorInstance = (typeof import('@/services/performance'))['default'];
-let performanceMonitorRef: PerformanceMonitorInstance | null = null;
-const loadPerformanceMonitor = async (): Promise<PerformanceMonitorInstance> => {
-  if (!performanceMonitorRef) {
-    const module = await import('@/services/performance');
-    performanceMonitorRef = module.default;
-  }
-  return performanceMonitorRef;
-};
 
-let healthCheckModule: Promise<typeof import('@/services/healthCheck')> | null = null;
-const loadHealthCheckModule = () => {
-  if (!healthCheckModule) {
-    healthCheckModule = import('@/services/healthCheck');
-  }
-  return healthCheckModule;
-};
+// Tabs scroll
+const tabsTrackRef = ref<HTMLElement | null>(null);
+const showTabsFadeLeft = ref(false);
+const showTabsFadeRight = ref(true);
 
-const formatIso = (value: string | number): string => {
-  try {
-    const date = typeof value === 'number' ? new Date(value) : new Date(value);
-    return date.toLocaleString();
-  } catch {
-    return String(value);
-  }
-};
-
-const programLoadingState = computed(() => appStore.programLoading);
-const userProgramValue = computed(() => appStore.userProgram);
-const programSourceValue = computed(() => appStore.programSource);
-const programSourceBadgeLabel = computed(() => {
-  const source = programSourceValue.value;
-  if (!source) return 'Нет данных';
-  if (source === 'database') return 'Supabase';
-  if (source === 'legacy_sql') return 'Резервный SQL';
-  if (source === 'schema_unavailable') return 'Резервный план';
-  return source;
-});
-const programSourceBadgeClass = computed(() => {
-  const source = programSourceValue.value;
-  if (!source) return 'badge--neutral';
-  return source === 'database' ? 'badge--success' : 'badge--warning';
-});
-type ProgramWithSelection = typeof userProgramValue.value extends infer T ? T & { selectedAt?: string | null } : never;
-
-const programSelectedAt = computed(() => {
-  const program = userProgramValue.value as ProgramWithSelection | null;
-  if (!program) {
-    return null;
-  }
-  const manualSelection = 'selectedAt' in program ? program.selectedAt ?? null : null;
-  return manualSelection ?? program.updatedAt ?? program.createdAt ?? null;
-});
-const programSelectedAtLabel = computed(() => {
-  return programSelectedAt.value ? formatIso(programSelectedAt.value) : '—';
-});
-const programSourceHint = computed(() => {
-  const source = programSourceValue.value;
-  if (!source || source === 'database') {
-    return null;
-  }
-  if (source === 'legacy_sql') {
-    return 'Данные загружены из резервной SQL-схемы. После миграции обнови программу для синхронизации.';
-  }
-  if (source === 'schema_unavailable') {
-    return 'Показан примерный план без связанной базы. Проверь подключение Supabase перед стартом тренировки.';
-  }
-  return null;
-});
-
-const healthCheckLoading = ref(false);
-const healthCheckResult = ref<HealthCheckResult | null>(null);
-const cacheSize = ref(0);
-
-const healthQuickActions = computed((): DropdownItem[] => [
-  {
-    id: 'refresh',
-    label: healthCheckLoading.value ? 'Проверяю…' : 'Повторить проверку',
-    description: 'Запустить health-check прямо сейчас',
-    icon: 'spark',
-    disabled: healthCheckLoading.value,
-    action: runHealthCheck,
-  },
-  {
-    id: 'analytics',
-    label: 'Открыть метрики',
-    description: 'Перейти к разделу «Аналитика»',
-    icon: 'chart',
-    action: () => {
-      void router.push({ name: 'Analytics' });
-    },
-  },
-  {
-    id: 'report',
-    label: 'Создать отчёт',
-    description: 'Собрать отчёт о прогрессе',
-    icon: 'report',
-    action: () => {
-      void router.push({ name: 'Report' });
-    },
-  },
-]);
-
-const performanceMetrics = ref({
-  avgApiResponseTime: 0,
-  avgRenderTime: 0,
-  totalMetrics: 0
-});
-
-type StatusTone = 'healthy' | 'degraded' | 'unhealthy';
-type HealthCheckMap = HealthCheckResult['checks'];
-type HealthCheckKey = keyof HealthCheckMap;
-
-const overallStatus = computed<StatusTone | null>(() => healthCheckResult.value?.status ?? null);
-type StatusVariant = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
-
-const statusVariant = (status: StatusTone | null): StatusVariant => {
-  switch (status) {
-    case 'healthy':
-      return 'success';
-    case 'degraded':
-      return 'warning';
-    case 'unhealthy':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
-};
-
-const checkEntries = computed<Array<[HealthCheckKey, HealthCheckMap[HealthCheckKey]]>>(() => {
-  if (!healthCheckResult.value) {
-    return [];
-  }
-  return Object.entries(healthCheckResult.value.checks) as Array<[
-    HealthCheckKey,
-    HealthCheckMap[HealthCheckKey]
-  ]>;
-});
-
-const statusLabel = (status: StatusTone) => {
-  switch (status) {
-    case 'healthy':
-      return 'Отлично';
-    case 'degraded':
-      return 'Нужно внимание';
-    case 'unhealthy':
-      return 'Проблемы';
-  }
-};
-
-const statusHint = (status: StatusTone | null) => {
-  switch (status) {
-    case 'healthy':
-      return 'Все сервисы работают стабильно.';
-    case 'degraded':
-      return 'Есть замедления или нестабильные сервисы — стоит проверить подробнее.';
-    case 'unhealthy':
-      return 'Критические ошибки. Требуется срочная диагностика.';
-    default:
-      return 'Данных ещё нет — запусти проверку.';
-  }
-};
-
-async function runHealthCheck() {
-  healthCheckLoading.value = true;
-  try {
-    const module = await loadHealthCheckModule();
-    healthCheckResult.value = await module.default.runHealthCheck();
-  } catch (error) {
-    console.error('Health check failed:', error);
-    appStore.showToast({
-      title: 'Ошибка',
-      message: 'Не удалось выполнить проверку состояния приложения',
-      type: 'error'
-    });
-  } finally {
-    healthCheckLoading.value = false;
-  }
-}
-
-const updatePerformanceMetrics = async () => {
-  const monitor = await loadPerformanceMonitor();
-  const metrics = monitor.getMetrics();
-
-  // Calculate average API response time
-  const apiMetrics = metrics.filter(m => m.name.startsWith('api_') && !m.name.includes('_error'));
-  const avgApiResponseTime = apiMetrics.length > 0
-    ? apiMetrics.reduce((sum, m) => sum + m.value, 0) / apiMetrics.length
-    : 0;
-
-  // Calculate average render time
-  const renderMetrics = metrics.filter(m => m.name.startsWith('render_'));
-  const avgRenderTime = renderMetrics.length > 0
-    ? renderMetrics.reduce((sum, m) => sum + m.value, 0) / renderMetrics.length
-    : 0;
-
-  performanceMetrics.value = {
-    avgApiResponseTime,
-    avgRenderTime,
-    totalMetrics: metrics.length
-  };
-};
-
-const formatMetric = (value: number): string => {
-  if (value < 1) return '<1 мс';
-  return `${Math.round(value)} мс`;
-};
-
-const formatMemoryUsage = (bytes: number): string => {
-  if (!Number.isFinite(bytes)) {
-    return '—';
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
-};
-
-type HealthCheckMetricRow = { id: string; label: string; value: string };
-
-const getCheckMetrics = (check: HealthCheckMap[HealthCheckKey]): HealthCheckMetricRow[] => {
-  const metrics: HealthCheckMetricRow[] = [];
-
-  if ('responseTime' in check && typeof check.responseTime === 'number') {
-    metrics.push({
-      id: 'response',
-      label: 'Время ответа',
-      value: `${check.responseTime.toFixed(0)} мс`,
-    });
-  }
-
-  if ('size' in check && typeof check.size === 'number') {
-    metrics.push({
-      id: 'cache-size',
-      label: 'Размер кэша',
-      value: `${check.size.toLocaleString('ru-RU')} элементов`,
-    });
-  }
-
-  if ('metrics' in check && check.metrics) {
-    const { avgApiResponseTime, avgRenderTime, memoryUsage } = check.metrics;
-    if (typeof avgApiResponseTime === 'number' && avgApiResponseTime > 0) {
-      metrics.push({
-        id: 'avg-api',
-        label: 'Среднее время API',
-        value: formatMetric(avgApiResponseTime),
-      });
-    }
-    if (typeof avgRenderTime === 'number' && avgRenderTime > 0) {
-      metrics.push({
-        id: 'avg-render',
-        label: 'Среднее время рендера',
-        value: formatMetric(avgRenderTime),
-      });
-    }
-    if (typeof memoryUsage === 'number' && memoryUsage > 0) {
-      metrics.push({
-        id: 'memory',
-        label: 'Память',
-        value: formatMemoryUsage(memoryUsage),
-      });
-    }
-  }
-
-  if ('authenticated' in check && typeof check.authenticated === 'boolean') {
-    metrics.push({
-      id: 'auth',
-      label: 'Авторизация',
-      value: check.authenticated ? 'Да' : 'Нет',
-    });
-  }
-
-  return metrics;
-};
-
-const clearPerformanceMetrics = async () => {
-  const monitor = await loadPerformanceMonitor();
-  monitor.clearMetrics();
-  await updatePerformanceMetrics();
-  appStore.showToast({
-    title: 'Успех',
-    message: 'Метрики производительности очищены',
-    type: 'success'
-  });
-};
-
-const clearCache = () => {
-  try {
-    clearAllCaches();
-    invalidateProgramContextCaches({ includeGlobal: true });
-    cacheSize.value = 0;
-    appStore.showToast({
-      title: 'Успех',
-      message: 'Кэш приложения очищен',
-      type: 'success'
-    });
-  } catch (error) {
-    appStore.showToast({
-      title: 'Ошибка',
-      message: 'Не удалось очистить кэш',
-      type: 'error'
-    });
-  }
-};
-
-const logout = () => {
-  appStore.showToast({
-    title: 'Выход',
-    message: 'Завершите работу через Telegram (закройте WebApp).',
-    type: 'info'
-  });
-};
-
-
-
-const getCheckName = (key: string): string => {
-  const names: Record<string, string> = {
-    api: 'API соединение',
-    cache: 'Кэш',
-    performance: 'Производительность',
-    auth: 'Аутентификация'
-  };
-  return names[key] || key;
+const handleTabsScroll = () => {
+  if (!tabsTrackRef.value) return;
+  const { scrollLeft, scrollWidth, clientWidth } = tabsTrackRef.value;
+  const threshold = 5;
+  showTabsFadeLeft.value = scrollLeft > threshold;
+  showTabsFadeRight.value = scrollLeft < scrollWidth - clientWidth - threshold;
 };
 
 onMounted(() => {
-  appStore.ensureProgramContext({ includeLevels: false }).catch((error) => {
-    console.warn('[SettingsPage] Failed to warm program context', error);
-  });
-
-  appStore.refreshAssistantSessionState({ force: true }).catch((error) => {
-    console.warn('[SettingsPage] Failed to refresh assistant latency stats', error);
-  });
-  appStore.ensureAssistantSessionMonitor();
-
-  runHealthCheck();
-  void updatePerformanceMetrics();
-
-  // Update cache size (placeholder)
-  cacheSize.value = 0;
-
+  nextTick(() => handleTabsScroll());
 });
+
+type TabId = 'profile' | 'notifications' | 'security' | 'data';
+const activeTab = ref<TabId>('profile');
+const tabs = [
+  { id: 'profile' as TabId, label: 'Профиль', icon: 'user' },
+  { id: 'notifications' as TabId, label: 'Уведомления', icon: 'bell' },
+  { id: 'security' as TabId, label: 'Безопасность', icon: 'shield' },
+  { id: 'data' as TabId, label: 'Данные', icon: 'hard-drive' },
+];
+
+// Body Params (FEAT-003)
+const profileLoading = ref(false);
+const bodyParams = computed(() => {
+  const prefs = appStore.profileSummary?.profile?.preferences as Record<string, unknown> | undefined;
+  return {
+    weightKg: (prefs?.weightKg as number) ?? null,
+    heightCm: (prefs?.heightCm as number) ?? null,
+  };
+});
+
+const handleBodyParamsUpdate = async (params: { weightKg: number | null; heightCm: number | null }) => {
+  profileLoading.value = true;
+  try {
+    await apiClient.updateProfile({
+      preferences: {
+        weightKg: params.weightKg,
+        heightCm: params.heightCm,
+      },
+    } as any);
+    // Refresh profile summary
+    await appStore.loadProfileSummary(true);
+    appStore.showToast({ title: 'Параметры сохранены', type: 'success' });
+  } catch (e: any) {
+    appStore.showToast({ title: 'Ошибка', message: e.message, type: 'error' });
+  } finally {
+    profileLoading.value = false;
+  }
+};
+
+// Notifications
+const notificationsEnabled = ref(!appStore.profileSummary?.profile?.notificationsPaused);
+const notificationTime = ref(appStore.profileSummary?.profile?.notificationTime?.substring(0, 5) || '10:00');
+const userTimezone = computed(() => appStore.profileSummary?.profile?.timezone || 'Europe/Moscow');
+
+const handleNotificationToggle = async () => {
+  try {
+    await apiClient.updateProfile({ notifications_paused: !notificationsEnabled.value });
+    appStore.showToast({ title: notificationsEnabled.value ? 'Уведомления включены' : 'Уведомления выключены', type: 'success' });
+  } catch (e: any) {
+    notificationsEnabled.value = !notificationsEnabled.value;
+    appStore.showToast({ title: 'Ошибка', message: e.message, type: 'error' });
+  }
+};
+
+const handleNotificationTimeChange = async () => {
+  try {
+    await apiClient.updateProfile({ notification_time: notificationTime.value + ':00' });
+    appStore.showToast({ title: 'Время обновлено', type: 'success' });
+  } catch (e: any) {
+    appStore.showToast({ title: 'Ошибка', message: e.message, type: 'error' });
+  }
+};
+
+// Security
+const showPinModal = ref(false);
+const pinLoading = ref(false);
+const pinError = ref('');
+const pinForm = ref({ current: '', new: '', confirm: '' });
+
+const closePinModal = () => {
+  showPinModal.value = false;
+  pinForm.value = { current: '', new: '', confirm: '' };
+  pinError.value = '';
+};
+
+const handlePinChange = async () => {
+  pinError.value = '';
+  if (!/^\d{4,6}$/.test(pinForm.value.current)) { pinError.value = 'Текущий PIN: 4-6 цифр'; return; }
+  if (!/^\d{4,6}$/.test(pinForm.value.new)) { pinError.value = 'Новый PIN: 4-6 цифр'; return; }
+  if (pinForm.value.new !== pinForm.value.confirm) { pinError.value = 'PIN-коды не совпадают'; return; }
+  
+  pinLoading.value = true;
+  try {
+    await apiClient.changePin(pinForm.value.current, pinForm.value.new);
+    appStore.showToast({ title: 'PIN-код изменён', type: 'success' });
+    closePinModal();
+  } catch (e: any) {
+    pinError.value = e.message?.includes('Неверный') ? 'Неверный текущий PIN' : (e.message || 'Ошибка');
+  } finally {
+    pinLoading.value = false;
+  }
+};
+
+const handleLogout = () => {
+  appStore.showToast({ title: 'Выход', message: 'Закройте WebApp в Telegram.', type: 'info' });
+};
+
+// Cache
+const cacheSize = ref('...');
+const cacheItems = ref(0);
+const serverLoading = ref(false);
+
+const calculateCache = () => {
+  let total = 0, count = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key) {
+      total += key.length + (localStorage.getItem(key)?.length || 0);
+      if (key.startsWith('tzona') || key.startsWith('app_')) count++;
+    }
+  }
+  const bytes = total * 2;
+  cacheSize.value = bytes < 1024 ? `${bytes} Б` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} КБ` : `${(bytes / (1024 * 1024)).toFixed(2)} МБ`;
+  cacheItems.value = count || localStorage.length;
+};
+
+const clearLocalCache = () => {
+  if (!confirm(`Очистить локальный кэш?\n\nРазмер: ${cacheSize.value}\nЭлементов: ${cacheItems.value}`)) return;
+  clearAllCaches();
+  appStore.showToast({ title: 'Кэш очищен', type: 'success' });
+  calculateCache();
+};
+
+const clearServerCache = async () => {
+  if (!confirm('Сбросить серверный кэш?')) return;
+  serverLoading.value = true;
+  try {
+    await cachedApiClient.clearServerCache();
+    invalidateProgramContextCaches();
+    appStore.showToast({ title: 'Серверный кэш сброшен', type: 'success' });
+  } catch (e: any) {
+    appStore.showToast({ title: 'Ошибка', message: e.message, type: 'error' });
+  } finally {
+    serverLoading.value = false;
+  }
+};
+
+onMounted(calculateCache);
 </script>
 
 <style scoped>
 .settings-page {
-  gap: clamp(1.75rem, 4vw, 3rem);
-}
-
-.settings-page__title-icon :deep(svg) {
-  width: 24px;
-  height: 24px;
-}
-
-.settings-card { 
-  gap: clamp(1rem, 3vw, 1.75rem);
-}
-
-.settings-card--program {
-  gap: clamp(1rem, 3vw, 1.75rem);
-}
-
-.settings-card--status {
-  gap: clamp(1.25rem, 3vw, 2rem);
-}
-
-.settings-card__title-icon {
-  filter: drop-shadow(0 6px 12px rgba(14, 116, 144, 0.25));
-}
-
-.surface-card__header--split {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-}
-
-.surface-card__header-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.settings-card__dropdown :deep(.dropdown__trigger) {
-  padding-inline: 0.85rem;
-  background: color-mix(in srgb, var(--color-surface-card) 92%, transparent);
-}
-
-.settings-card__loader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  min-height: 120px;
-}
-
-.settings-program {
+  position: fixed;
+  inset: var(--header-height, 60px) 0 calc(var(--footer-height, 64px) + env(safe-area-inset-bottom)) 0;
   display: flex;
   flex-direction: column;
-  gap: clamp(0.75rem, 2vw, 1.25rem);
+  background: var(--color-bg);
+  overflow: hidden;
 }
 
-.settings-program__details {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: clamp(0.75rem, 2vw, 1.25rem);
+/* Background */
+.settings-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.settings-bg__grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.settings-bg__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.25;
+}
+.settings-bg__glow--1 { width: 180px; height: 180px; top: -40px; right: -20px; background: var(--color-accent); }
+.settings-bg__glow--2 { width: 140px; height: 140px; bottom: 25%; left: -30px; background: #a855f7; }
+
+/* Header */
+.settings-header {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 0.5rem 1rem 0.3rem;
+  flex-shrink: 0;
+}
+.settings-header h1 {
+  font-size: 1.3rem;
+  font-weight: 800;
   margin: 0;
-}
-
-.settings-program__details dt {
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-muted);
-  margin-bottom: 0.35rem;
-}
-
-.settings-program__details dd {
-  margin: 0;
-  font-size: var(--font-size-md);
-  font-weight: 600;
   color: var(--color-text-primary);
 }
-
-.settings-program__hint {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: color-mix(in srgb, var(--color-warning) 55%, var(--color-text-secondary));
-}
-
-.settings-card__hint {
-  font-size: var(--font-size-sm);
+.settings-header p {
+  font-size: 0.72rem;
   color: var(--color-text-secondary);
-  margin: -0.25rem 0 0;
+  margin: 0.05rem 0 0;
 }
 
-.settings-status__item-meta {
-  display: grid;
-  gap: var(--space-xs);
-  margin: 0;
-  padding: 0;
+/* Tabs wrapper - SMART FADES like ExerciseModal */
+.tabs-wrapper {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  margin: 0 -1rem;
+  padding: 0.25rem 0; /* Add vertical padding for smooth fade edges */
 }
 
-.settings-status__metric-row {
+.tabs-track {
   display: flex;
-  justify-content: space-between;
-  gap: var(--space-sm);
+  gap: 0.4rem;
+  padding: 0.35rem 2rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.tabs-track::-webkit-scrollbar { display: none; }
+
+/* Smart fade overlays - smooth edges using mask */
+.tabs-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 56px;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  /* Use mask to create soft edges on all sides */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%);
+}
+.tabs-fade--visible {
+  opacity: 1;
+}
+.tabs-fade--left {
+  left: 0;
+  background: linear-gradient(to right, var(--color-bg) 0%, var(--color-bg) 50%, transparent 100%);
+}
+.tabs-fade--right {
+  right: 0;
+  background: linear-gradient(to left, var(--color-bg) 0%, var(--color-bg) 50%, transparent 100%);
 }
 
-.settings-status__item-meta dt {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.03);
   color: var(--color-text-secondary);
-}
-
-.settings-status__item-meta dd {
-  margin: 0;
+  font-size: 0.78rem;
   font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.tab-item:hover { background: rgba(255,255,255,0.06); color: var(--color-text-primary); }
+.tab-item--active {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border);
   color: var(--color-text-primary);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
 
-.settings-card__actions {
+/* Main - TRUE OVERLAY SCROLL (no content shift) */
+.settings-main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 0.4rem 1rem 0.8rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Truly invisible scrollbar that doesn't shift content */
+  scrollbar-width: none;
+}
+.settings-main::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.panel {
   display: flex;
-  justify-content: flex-end;
-  gap: var(--space-sm);
-  margin-top: var(--space-md);
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
 }
 
-.settings-cache {
+/* Card */
+.card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+}
+.card-header {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
-  border: 1px solid var(--color-border-subtle);
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
 }
+.card-header__text { flex: 1; }
+.card-header__text h2 { font-size: 0.9rem; font-weight: 700; margin: 0; color: var(--color-text-primary); }
+.card-header__text span { font-size: 0.68rem; color: var(--color-text-muted); }
+.card-body { padding: 0.7rem 0.85rem; display: flex; flex-direction: column; gap: 0.55rem; }
 
-.settings-cache__label {
-  display: block;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+/* Setting Item */
+.setting-item { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.setting-item--sub { padding-left: 0.5rem; border-left: 2px solid var(--color-accent); margin-left: 0.1rem; }
+.setting-item__info { flex: 1; min-width: 0; }
+.setting-item__title { display: block; font-size: 0.82rem; font-weight: 600; color: var(--color-text-primary); }
+.setting-item__desc { display: block; font-size: 0.68rem; color: var(--color-text-muted); }
+
+/* Toggle */
+.toggle-switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-switch span {
+  position: absolute; inset: 0;
+  background: rgba(255,255,255,0.1);
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background 0.2s;
 }
+.toggle-switch span::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 18px; height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+.toggle-switch input:checked + span { background: var(--color-accent); }
+.toggle-switch input:checked + span::after { transform: translateX(18px); }
 
-.settings-cache__value {
-  font-size: clamp(1.5rem, 3vw, 2.25rem);
-  font-weight: 700;
+/* Time field */
+.time-field {
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: rgba(255,255,255,0.02);
   color: var(--color-text-primary);
-}
-@media (max-width: 920px) {
-  .settings-account {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .settings-card__actions {
-    justify-content: stretch;
-  }
-
-  .settings-card__actions .button {
-    width: 100%;
-  }
+  font-size: 0.8rem;
+  font-weight: 600;
 }
 
-@media (max-width: 640px) {
-  .settings-status__summary {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .settings-status__metric {
-    margin-left: 0;
-  }
+/* Stats */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+.stat-box {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 0.5rem;
+  background: rgba(255,255,255,0.02);
+  border-radius: 6px;
 }
+.stat-box strong { font-size: 0.95rem; font-weight: 800; color: var(--color-text-primary); }
+.stat-box span { font-size: 0.55rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
 
+/* Info */
+.info-text { font-size: 0.72rem; color: var(--color-text-secondary); line-height: 1.35; margin: 0; }
+
+/* Buttons */
+.action-btn {
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: rgba(255,255,255,0.04);
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.action-btn:hover { background: rgba(255,255,255,0.08); }
+.action-btn--primary { background: var(--color-accent); border-color: transparent; color: var(--color-accent-contrast); }
+.action-btn--primary:hover { filter: brightness(1.1); }
+.action-btn--danger { background: rgba(239,68,68,0.1); border-color: transparent; color: #ef4444; }
+.action-btn--danger:hover { background: rgba(239,68,68,0.18); }
+
+.wide-btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.3rem;
+  width: 100%;
+  padding: 0.55rem;
+  border-radius: 8px;
+  border: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.wide-btn--warning { background: rgba(245,158,11,0.1); color: #f59e0b; }
+.wide-btn--warning:hover { background: rgba(245,158,11,0.18); }
+.wide-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Footer */
+.settings-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 1rem;
+  border-top: 1px solid rgba(255,255,255,0.03);
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+.settings-footer em { font-style: normal; opacity: 0.6; }
+.settings-footer a { display: flex; align-items: center; gap: 0.2rem; color: var(--color-text-secondary); transition: color 0.15s; }
+.settings-footer a:hover { color: var(--color-accent); }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+.modal-box {
+  width: 100%; max-width: 280px;
+  background: var(--color-bg-elevated);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+.modal-box header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.modal-box header h3 { font-size: 0.85rem; font-weight: 700; margin: 0; }
+.modal-box header button { background: none; border: none; color: var(--color-text-secondary); cursor: pointer; padding: 0.1rem; }
+.modal-box form { padding: 0.75rem 0.85rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.modal-box label { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.68rem; font-weight: 600; color: var(--color-text-secondary); }
+.modal-box input {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: rgba(255,255,255,0.02);
+  color: var(--color-text-primary);
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+.modal-box input:focus { outline: none; border-color: var(--color-accent); }
+.error-msg { font-size: 0.72rem; color: #ef4444; text-align: center; margin: 0; }
+.modal-actions { display: flex; gap: 0.4rem; margin-top: 0.25rem; }
+.modal-actions .action-btn { flex: 1; }
+
+/* Transitions */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s, transform 0.15s; }
+.fade-enter-from { opacity: 0; transform: translateY(6px); }
+.fade-leave-to { opacity: 0; transform: translateY(-4px); }
+
+.slide-down-enter-active, .slide-down-leave-active { transition: all 0.15s; overflow: hidden; }
+.slide-down-enter-from, .slide-down-leave-to { opacity: 0; max-height: 0; }
+
+.modal-enter-active, .modal-leave-active { transition: opacity 0.15s; }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
+
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

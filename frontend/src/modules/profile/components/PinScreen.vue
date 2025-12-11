@@ -299,10 +299,11 @@ const checkPin = async () => {
         emit('success');
       }, 1200); // Ускорено до 1.2 секунды для совпадения с анимацией логотипа
     } else {
-      showError();
+      showError(response.message);
     }
   } catch (err: any) {
-    showError();
+    const errorMsg = err.response?.data?.message || err.message || 'Ошибка проверки';
+    showError(errorMsg);
     console.error('PIN verification failed:', err);
   } finally {
     if (!success.value) {
@@ -313,11 +314,11 @@ const checkPin = async () => {
   }
 };
 
-const showError = () => {
+const showError = (message?: string) => {
   // Показываем красную обводку
   showErrorOutline.value = true;
   batchRAF(() => {
-    error.value = 'Неверный PIN';
+    error.value = message || 'Неверный PIN';
   });
 
   hapticError();
@@ -328,7 +329,7 @@ const showError = () => {
       error.value = '';
       showErrorOutline.value = false;
     });
-  }, 1500);
+  }, 2000); // Increased timeout to read message
 };
 
 // Функция для стилей кнопок (быстрый визуальный отклик)

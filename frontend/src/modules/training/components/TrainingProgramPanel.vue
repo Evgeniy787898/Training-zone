@@ -168,7 +168,7 @@ defineExpose({
   top: 0;
   z-index: 10;
   height: var(--nav-bar-height);
-  min-height: 100%;
+  min-height: var(--nav-bar-height);
   display: flex;
   align-items: center;
   justify-content: center;

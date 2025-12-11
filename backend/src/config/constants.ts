@@ -360,11 +360,14 @@ export const cacheConfig = Object.freeze({
     }),
     aiAdvice: Object.freeze({
       ttlSeconds: clampNumber(
-        parsePositiveInt(process.env.CACHE_ASSISTANT_AI_ADVICE_TTL_SECONDS, 45),
+        parsePositiveInt(process.env.CACHE_ASSISTANT_AI_ADVISOR_TTL_SECONDS, 45),
         10,
         10 * 60,
       ),
     }),
+  }),
+  analytics: Object.freeze({
+    ttlSeconds: 5 * 60,
   }),
 }) satisfies CacheConfig;
 
@@ -429,6 +432,7 @@ export const cacheVersioningConfig = Object.freeze({
     trainingPrograms: parseCacheVersion(process.env.CACHE_VERSION_TRAINING_PROGRAMS, 1),
     assistantNotesPage: parseCacheVersion(process.env.CACHE_VERSION_ASSISTANT_NOTES_PAGE, 1),
     aiAdvisorAdvice: parseCacheVersion(process.env.CACHE_VERSION_AI_ADVISOR_ADVICE, 1),
+    analytics: parseCacheVersion(process.env.CACHE_VERSION_ANALYTICS, 1),
   }),
 }) satisfies CacheVersioningConfig;
 
@@ -541,6 +545,7 @@ export const bodySizeDefaults = Object.freeze({
   formBytes: sizeUnits.MB,
   textBytes: 256 * sizeUnits.KB,
   binaryBytes: 256 * sizeUnits.KB,
+  multipartBytes: 150 * sizeUnits.MB, // For ZIP file uploads
 }) satisfies BodySizeDefaults;
 
 export const rateLimitConfig = Object.freeze({

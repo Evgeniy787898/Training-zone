@@ -3,8 +3,6 @@ import { defineAsyncComponent } from 'vue';
 export interface LazyComponentOptions {
     /** Delay in ms before showing the loading state. Defaults to 50ms to avoid flashes. */
     delay?: number;
-    /** Maximum time (ms) we wait for the component before throwing. Defaults to 10s. */
-    timeout?: number;
     /** Number of retry attempts if the dynamic import fails. Defaults to 2 retries. */
     maxRetries?: number;
     /** Allow callers to react to loader errors (e.g., monitoring). */
@@ -17,7 +15,6 @@ export function createLazyComponent(
     loader: () => Promise<any>,
     {
         delay = 50,
-        timeout = 10_000,
         maxRetries = 2,
         onError,
         suspensible = false,
@@ -37,7 +34,7 @@ export function createLazyComponent(
             }
         },
         delay,
-        timeout,
+        // No timeout - components will wait indefinitely instead of throwing errors
         suspensible,
         onError(error, retry, fail, attempts) {
             onError?.(error);

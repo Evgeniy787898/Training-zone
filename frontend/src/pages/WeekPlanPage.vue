@@ -1,5 +1,11 @@
 <template>
   <div class="page-shell week-page">
+    <!-- Background -->
+    <div class="page-bg">
+      <div class="page-bg__grid"></div>
+      <div class="page-bg__glow page-bg__glow--1"></div>
+      <div class="page-bg__glow page-bg__glow--2"></div>
+    </div>
     <header class="page-header week-page__header">
       <div>
         <h1 class="page-title">
@@ -51,51 +57,17 @@
 
       <template v-else>
       <ul class="week-grid" role="list">
-        <li
+        <WeekDayCard
           v-for="(day, index) in days"
           :key="index"
-          class="surface-card week-card"
-          :class="{
-            'week-card--today': day.isToday,
-            'week-card--completed': day.status === 'done',
-            'week-card--rest': day.status === 'rest'
-          }"
-          role="article"
-          :aria-label="describeDay(day)"
-        >
-          <header class="week-card__header">
-            <div>
-              <span class="week-card__day">{{ day.day }}</span>
-              <span class="week-card__date">{{ day.date }}</span>
-            </div>
-            <NeonIcon
-              v-if="day.isToday"
-              name="spark"
-              variant="lime"
-              :size="20"
-            />
-            <NeonIcon
-              v-else-if="day.status === 'done'"
-              name="success"
-              variant="emerald"
-              :size="20"
-            />
-            <NeonIcon
-              v-else-if="day.status === 'rest'"
-              name="crescent"
-              variant="emerald"
-              :size="20"
-            />
-          </header>
-
-          <div class="week-card__body">
-            <span class="week-card__type">{{ day.session?.session_type || 'Отдых' }}</span>
-            <span v-if="day.session?.focus" class="week-card__focus">
-              <NeonIcon name="target" variant="violet" :size="16" />
-              {{ day.session.focus }}
-            </span>
-          </div>
-        </li>
+          :day-name="day.day"
+          :date="day.date"
+          :is-today="day.isToday"
+          :status="day.status"
+          :session="day.session"
+          :disabled="updatingSessionId === day.session?.id"
+          @toggle-rest="toggleRestDay(day)"
+        />
       </ul>
 
       <section class="surface-card week-summary" aria-label="Итоги недели">
@@ -133,6 +105,7 @@ import NeonIcon from '@/modules/shared/components/NeonIcon.vue';
 import AppIcon from '@/modules/shared/components/AppIcon.vue';
 import ErrorState from '@/modules/shared/components/ErrorState.vue';
 import SkeletonCard from '@/modules/shared/components/SkeletonCard.vue';
+import WeekDayCard from '@/modules/week/components/WeekDayCard.vue';
 
 const router = useRouter();
 const appStore = useAppStore();
@@ -224,17 +197,6 @@ const goToToday = () => {
   router.push('/today');
 };
 
-const describeDay = (day: WeekDayView) => {
-  const type = day.session?.session_type || 'Отдых';
-  const focus = day.session?.focus ? `, фокус ${day.session.focus}` : '';
-  const statusLabel =
-    day.status === 'done'
-      ? ', выполнено'
-      : day.status === 'rest'
-        ? ', день восстановления'
-        : '';
-  return `${day.day} ${day.date}. ${type}${focus}${statusLabel}`;
-};
 
 let pendingReload = false;
 
@@ -264,6 +226,45 @@ const handleChangeWeek = (direction: number) => {
   const newDate = new Date(referenceDate.value);
   newDate.setDate(newDate.getDate() + direction * 7);
   referenceDate.value = newDate;
+};
+
+// GAP-007: Toggle rest status
+const updatingSessionId = ref<string | null>(null);
+
+const toggleRestDay = async (day: WeekDayView) => {
+  if (!day.session?.id) return;
+  
+  const sessionId = day.session.id;
+  const currentStatus = day.session.status;
+  const newStatus = currentStatus === 'rest' ? 'planned' : 'rest';
+  
+  updatingSessionId.value = sessionId;
+  
+  try {
+    await apiClient.updateSession(sessionId, { status: newStatus });
+    // Update local state
+    const sessionIndex = sessions.value.findIndex(s => s.id === sessionId);
+    if (sessionIndex !== -1) {
+      sessions.value[sessionIndex] = {
+        ...sessions.value[sessionIndex],
+        status: newStatus,
+      };
+    }
+    showToast({
+      title: newStatus === 'rest' ? 'День отдыха' : 'Тренировка',
+      message: newStatus === 'rest' ? 'Статус изменён на отдых' : 'Статус изменён на тренировку',
+      type: 'success',
+    });
+  } catch (error: any) {
+    console.error('[WeekPlanPage] Failed to toggle rest:', error);
+    showToast({
+      title: 'Ошибка',
+      message: error.message || 'Не удалось изменить статус',
+      type: 'error',
+    });
+  } finally {
+    updatingSessionId.value = null;
+  }
 };
 
 watch(referenceDate, () => {
@@ -297,8 +298,32 @@ onMounted(async () => {
 
 <style scoped>
 .week-page {
+  position: relative;
   gap: clamp(1.5rem, 4vw, 2.5rem);
 }
+
+/* Background */
+.page-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.page-bg__grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.page-bg__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.25;
+}
+.page-bg__glow--1 { width: 180px; height: 180px; top: -40px; right: -20px; background: var(--color-accent); }
+.page-bg__glow--2 { width: 140px; height: 140px; bottom: 25%; left: -30px; background: #a855f7; }
 
 .week-page__controls {
   display: flex;
@@ -414,6 +439,16 @@ onMounted(async () => {
   color: color-mix(in srgb, var(--surface-accent, var(--color-accent)) 42%, var(--color-text-secondary));
 }
 
+/* GAP-006: Planned Load Styles */
+.week-card__volume {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-2xs);
+}
+
 .week-summary {
   gap: var(--space-lg);
   --surface-accent: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
@@ -452,6 +487,26 @@ onMounted(async () => {
 .week-summary__actions {
   display: flex;
   justify-content: flex-end;
+}
+
+/* GAP-007: Week card footer */
+.week-card__footer {
+  margin-top: auto;
+  padding-top: var(--space-xs);
+  border-top: 1px dashed color-mix(in srgb, var(--color-border) 50%, transparent);
+}
+
+.week-card__toggle {
+  width: 100%;
+  justify-content: center;
+  gap: var(--space-xs);
+  font-size: var(--font-size-xs);
+  padding: var(--space-2xs) var(--space-sm);
+}
+
+.week-card__toggle:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 @media (max-width: 720px) {

@@ -29,10 +29,14 @@ export function useHeroPanel(refs: HeroPanelRefs, options: HeroPanelOptions) {
     const nonPassiveTouchOptions: AddEventListenerOptions = { passive: false };
 
     // Calculate header transform
+    // Header starts at top: 0. When expanded, it should move down by maxHeaderOffset
+    // so its top edge aligns with the bottom edge of the panel.
+    // maxHeaderOffset = viewport - header - footer, so header ends up just above footer.
     const headerStyle = computed(() => {
         if (isGridLayoutActive.value) {
             return { transform: 'translateY(0)', transition: 'none' };
         }
+
         if (isDragging.value) {
             const offset = Math.max(0, Math.min(currentDragY.value, maxHeaderOffset.value));
             return { transform: `translateY(${offset}px)`, transition: 'none' };
@@ -86,7 +90,9 @@ export function useHeroPanel(refs: HeroPanelRefs, options: HeroPanelOptions) {
         }
 
         // Calculate available height based on viewport
-        // We want the panel to expand to cover the screen, stopping at the footer/navigation
+        // Panel starts at top: 0 and should end at the top edge of the expanded header
+        // When expanded, header moves down and sits above footer
+        // So panel height = viewport - headerHeight - footerHeight
         const footerElement = footerRef.value;
         let footerH = 0;
 
@@ -99,8 +105,8 @@ export function useHeroPanel(refs: HeroPanelRefs, options: HeroPanelOptions) {
             footerH = parseFloat(rootStyles.getPropertyValue('--footer-height') || '64');
         }
 
-        // Max offset is viewport height - header height - footer height
-        // This ensures it stops exactly above the footer/navigation
+        // Max offset = viewport - header - footer
+        // This ensures panel ends exactly at the top edge of the expanded header
         const viewportHeight = window.innerHeight;
         const calculatedOffset = Math.max(0, viewportHeight - measuredHeaderHeight - footerH);
 

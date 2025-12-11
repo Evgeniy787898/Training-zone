@@ -30,7 +30,7 @@ precacheAndRoute([
 ]);
 
 const pageCache = new NetworkFirst({
-    cacheName: 'tzona-pages-v1',
+    cacheName: 'tzona-pages-v2',
     networkTimeoutSeconds: 5,
     plugins: [
         new CacheableResponsePlugin({ statuses: [200] }),
@@ -39,7 +39,7 @@ const pageCache = new NetworkFirst({
 });
 
 const assetCache = new StaleWhileRevalidate({
-    cacheName: 'tzona-assets-v1',
+    cacheName: 'tzona-assets-v2',
     plugins: [
         new CacheableResponsePlugin({ statuses: [200] }),
         new ExpirationPlugin({ maxEntries: 64, purgeOnQuotaError: true }),
@@ -47,11 +47,15 @@ const assetCache = new StaleWhileRevalidate({
 });
 
 const apiCache = new NetworkFirst({
-    cacheName: 'tzona-api-v1',
+    cacheName: 'tzona-api-v2',
     networkTimeoutSeconds: 10,
     plugins: [
         new CacheableResponsePlugin({ statuses: [200] }),
-        new ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 60 * 10, purgeOnQuotaError: true }),
+        new ExpirationPlugin({
+            maxEntries: 100,
+            maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days offline support
+            purgeOnQuotaError: true
+        }),
     ],
 });
 
@@ -70,7 +74,7 @@ registerRoute(
 registerRoute(
     ({ request }: RouteMatchContext) => request.destination === 'image',
     new CacheFirst({
-        cacheName: 'tzona-images-v1',
+        cacheName: 'tzona-images-v2',
         plugins: [
             new CacheableResponsePlugin({ statuses: [200] }),
             new ExpirationPlugin({ maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 7, purgeOnQuotaError: true }),

@@ -7,14 +7,14 @@ export interface BatchRequest {
   id: string;
   method: string;
   url: string;
-  params?: any;
+  params?: Record<string, unknown>;
   priority?: 'high' | 'medium' | 'low';
 }
 
 export interface BatchResponse<T> {
   id: string;
   data?: T;
-  error?: any;
+  error?: unknown;
 }
 
 class BatchRequestManager {

@@ -61,6 +61,17 @@ class PersonalizationPayload(BaseModel):
     readiness: Optional[PersonalizationReadiness] = None
 
 
+class WorkoutContext(BaseModel):
+    """Current workout session context for AI personalization (AI-F02)."""
+    disciplineName: Optional[str] = None
+    disciplineType: Optional[str] = None  # strength, cardio, flexibility, etc.
+    exercisesCompleted: Optional[int] = None
+    exercisesTotal: Optional[int] = None
+    durationMinutes: Optional[int] = None
+    status: Optional[str] = None  # in_progress, paused, completed
+    currentExerciseIndex: Optional[int] = None
+
+
 class AdviceRequest(BaseModel):
     """Request for generating exercise advice."""
     exerciseKey: str
@@ -69,6 +80,7 @@ class AdviceRequest(BaseModel):
     goals: Optional[List[str]] = None
     context: Optional[List[AdviceContextEntry]] = None
     personalization: Optional[PersonalizationPayload] = None
+    workoutContext: Optional[WorkoutContext] = None  # AI-F02
 
 
 class AdviceResponse(BaseModel):

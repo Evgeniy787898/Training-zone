@@ -212,7 +212,9 @@ const formatNumber = (num: number) => {
 
 /* Card */
 .metric-card {
-  flex: 0 1 100px;
+  flex: 1 1 0;
+  min-width: 95px;
+  max-width: 120px;
   perspective: 400px;
   cursor: pointer;
 }

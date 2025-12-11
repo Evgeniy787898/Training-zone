@@ -253,9 +253,6 @@ async function hydrateSessionRecords(prisma: SafePrismaClient, sessions: any[]):
                     reps: true,
                     imageUrl: true,
                     imageUrl2: true,
-                    image1: true,
-                    image2: true,
-                    image3: true,
                     updatedAt: true,
                 },
             },
@@ -636,6 +633,93 @@ export class DatabaseService {
         return Array.from(latestByExercise.values());
     }
 
+    async getSessionsTrend(profileId: string, startDate: Date) {
+        const sessions = await this.prisma.trainingSession.findMany({
+            where: {
+                profileId,
+                plannedAt: { gte: startDate },
+            },
+            select: {
+                plannedAt: true,
+                status: true,
+                disciplineId: true,
+            },
+            orderBy: { plannedAt: 'asc' },
+        });
+
+        const dataPoints = sessions.map(s => ({
+            date: format(new Date(s.plannedAt), 'yyyy-MM-dd'),
+            status: s.status,
+            disciplineId: s.disciplineId,
+        }));
+
+        return {
+            report: 'sessions_trend',
+            chart: {
+                type: 'line',
+                data: dataPoints,
+            },
+            summary: {
+                total: sessions.length,
+                completed: sessions.filter(s => s.status === 'done').length,
+            },
+        };
+    }
+
+    async getDisciplineBreakdown(profileId: string, startDate: Date) {
+        const sessions = await this.prisma.trainingSession.findMany({
+            where: {
+                profileId,
+                status: 'done',
+                plannedAt: { gte: startDate },
+                disciplineId: { not: null },
+            },
+            select: {
+                disciplineId: true,
+            },
+        });
+
+        // Group by discipline
+        const disciplineCounts = new Map<string, number>();
+        for (const s of sessions) {
+            if (s.disciplineId) {
+                disciplineCounts.set(s.disciplineId, (disciplineCounts.get(s.disciplineId) || 0) + 1);
+            }
+        }
+
+        const dataPoints = Array.from(disciplineCounts.entries()).map(([id, count]) => ({
+            label: id, // In a real app we'd join with discipline table to get name
+            value: count,
+        }));
+
+        return {
+            report: 'discipline_breakdown',
+            chart: {
+                type: 'doughnut',
+                data: dataPoints,
+            },
+            summary: {
+                totalHelper: sessions.length
+            }
+        };
+    }
+
+    async getProgramCompletion(profileId: string, startDate: Date) {
+        // Mock implementation for now as program structure is complex
+        // In reality, this would query `userProgram` progress
+        return {
+            report: 'program_completion',
+            chart: {
+                type: 'bar',
+                data: [],
+            },
+            summary: {
+                active: 0,
+                completed: 0,
+            }
+        };
+    }
+
     // Metrics operations
     async recordMetric(profileId: string, metricType: string, value: number, unit: string, source = 'bot') {
         return this.prisma.metric.create({
@@ -749,6 +833,29 @@ export class DatabaseService {
             where: {
                 profileId,
                 stateType,
+            },
+        });
+    }
+
+    async setDialogState(profileId: string, stateType: string, statePayload: Record<string, any>, expiryMinutes: number = 30) {
+        const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+        return this.prisma.dialogState.upsert({
+            where: {
+                profileId_stateType: {
+                    profileId,
+                    stateType,
+                },
+            },
+            update: {
+                statePayload,
+                expiresAt,
+                updatedAt: new Date(),
+            },
+            create: {
+                profileId,
+                stateType,
+                statePayload,
+                expiresAt,
             },
         });
     }

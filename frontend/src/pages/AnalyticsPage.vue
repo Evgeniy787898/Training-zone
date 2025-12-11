@@ -1,5 +1,11 @@
 <template>
   <div class="page-shell analytics-page">
+    <!-- Background -->
+    <div class="page-bg">
+      <div class="page-bg__grid"></div>
+      <div class="page-bg__glow page-bg__glow--1"></div>
+      <div class="page-bg__glow page-bg__glow--2"></div>
+    </div>
     <SectionHeading
       as="h1"
       title="Аналитика и отчёты"
@@ -68,17 +74,8 @@
           <p class="empty-state__description">Отмечай тренировки, чтобы появился график динамики объёма.</p>
         </div>
         <div v-else class="analytics-chart">
-          <div class="analytics-chart__bars" role="list">
-            <button
-              v-for="(item, index) in volumeChart"
-              :key="index"
-              class="analytics-chart__bar"
-              :style="{ '--chart-value': maxVolume ? item.volume / maxVolume : 0 }"
-              type="button"
-              :aria-label="`Объём ${item.volume}`"
-            >
-              <span class="analytics-chart__tooltip">{{ item.volume }}</span>
-            </button>
+          <div class="analytics-chart__container">
+            <Line :data="chartData" :options="chartOptions" />
           </div>
           <div class="analytics-chart__meta">
             Всего тренировок: <strong>{{ volumeSummary?.period_sessions || 0 }}</strong>
@@ -208,6 +205,30 @@ import { useVirtualScroller } from '@/composables/useVirtualScroller';
 import { runProgressiveTasks } from '@/features/core/progressiveContent';
 import { useCachedRequest } from '@/composables/useCachedRequest';
 
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
+} from 'chart.js';
+import { Line } from 'vue-chartjs';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
+
 const appStore = useAppStore();
 const { profileSummary, showToast } = appStore;
 
@@ -281,15 +302,97 @@ const volumeChart = computed(() => volumeData.value?.chart || []);
 const volumeSummary = computed(() => volumeData.value?.summary);
 const rpeChart = computed(() => rpeData.value?.chart || []);
 
-const maxVolume = computed(() => {
-  if (volumeChart.value.length === 0) return 1;
-  return Math.max(...volumeChart.value.map((item: any) => item.volume));
-});
-
 const maxRpe = computed(() => {
   if (rpeChart.value.length === 0) return 1;
   return Math.max(...rpeChart.value.map((item: any) => item.value));
 });
+
+const chartData = computed(() => {
+  const labels = volumeChart.value.map((item: any) => item.label);
+  const data = volumeChart.value.map((item: any) => item.volume);
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Объём (кг)',
+        backgroundColor: (ctx: any) => {
+          const canvas = ctx.chart.ctx;
+          const gradient = canvas.createLinearGradient(0, 0, 0, 300);
+          gradient.addColorStop(0, 'rgba(96, 165, 250, 0.4)');
+          gradient.addColorStop(1, 'rgba(96, 165, 250, 0)');
+          return gradient;
+        },
+        borderColor: '#60a5fa',
+        pointBackgroundColor: '#60a5fa',
+        pointBorderColor: '#fff',
+        pointHoverBackgroundColor: '#fff',
+        pointHoverBorderColor: '#60a5fa',
+        data,
+        fill: true,
+        tension: 0.4,
+      },
+    ],
+  };
+});
+
+const chartOptions = computed(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      display: false,
+    },
+    tooltip: {
+      mode: 'index' as const,
+      intersect: false,
+      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      titleColor: '#f8fafc',
+      bodyColor: '#cbd5e1',
+      borderColor: 'rgba(148, 163, 184, 0.2)',
+      borderWidth: 1,
+      padding: 10,
+      displayColors: false,
+      callbacks: {
+        label: (context: any) => `Объём: ${context.parsed.y} кг`,
+      },
+    },
+  },
+  scales: {
+    x: {
+      grid: {
+        display: false,
+        drawBorder: false,
+      },
+      ticks: {
+        color: '#94a3b8',
+        font: {
+          size: 11,
+        },
+        maxTicksLimit: window.innerWidth < 640 ? 5 : 8,
+      },
+    },
+    y: {
+      grid: {
+        color: 'rgba(148, 163, 184, 0.1)',
+        drawBorder: false,
+      },
+      ticks: {
+        color: '#94a3b8',
+        font: {
+          size: 10,
+        },
+        maxTicksLimit: 5,
+      },
+      beginAtZero: true,
+    },
+  },
+  interaction: {
+    mode: 'nearest' as const,
+    axis: 'x' as const,
+    intersect: false,
+  },
+}));
 
 const loadCoreAnalytics = async () => {
   await Promise.all([fetchVolumeReport('30d'), fetchRpeReport('30d')]);
@@ -341,8 +444,32 @@ onMounted(() => {
 
 <style scoped>
 .analytics-page {
+  position: relative;
   gap: clamp(1.5rem, 4vw, 2.5rem);
 }
+
+/* Background */
+.page-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.page-bg__grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.page-bg__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.25;
+}
+.page-bg__glow--1 { width: 180px; height: 180px; top: -40px; right: -20px; background: var(--color-accent); }
+.page-bg__glow--2 { width: 140px; height: 140px; bottom: 25%; left: -30px; background: #a855f7; }
 
 .analytics-page__loading,
 .analytics-page__error {
@@ -370,64 +497,17 @@ onMounted(() => {
   gap: var(--space-md);
 }
 
-.analytics-chart__bars {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12px, 1fr));
-  gap: var(--space-xs);
-  align-items: end;
-}
-
-.analytics-chart__bar {
+.analytics-chart__container {
   position: relative;
-  display: block;
+  height: 240px;
   width: 100%;
-  min-height: 160px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
-  overflow: hidden;
-  cursor: pointer;
-  transition: transform 0.2s ease, background 0.2s ease;
-}
-
-.analytics-chart__bar::after {
-  content: '';
-  position: absolute;
-  inset: auto 0 0 0;
-  height: calc(var(--chart-value, 0) * 100%);
-  background: var(--gradient-accent-strong);
-  border-radius: var(--radius-md);
-  transition: height 0.3s ease;
-}
-
-.analytics-chart__bar:hover,
-.analytics-chart__bar:focus-visible {
-  transform: translateY(-4px);
-}
-
-.analytics-chart__tooltip {
-  position: absolute;
-  bottom: calc(var(--chart-value, 0) * 100% + 0.75rem);
-  left: 50%;
-  transform: translateX(-50%);
-  padding: var(--space-2xs) var(--space-xs);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--color-bg-elevated) 95%, transparent);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-xs);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-
-.analytics-chart__bar:hover .analytics-chart__tooltip,
-.analytics-chart__bar:focus-visible .analytics-chart__tooltip {
-  opacity: 1;
 }
 
 .analytics-chart__meta {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+  text-align: right;
+  margin-top: -0.5rem;
 }
 
 .analytics-rpe {

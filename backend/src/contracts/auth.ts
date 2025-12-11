@@ -27,5 +27,25 @@ export const telegramAuthSchema = z
     })
     .strict();
 
+// SETT-F01: Change PIN schema - requires old PIN for verification
+export const changePinSchema = z
+    .object({
+        oldPin: z
+            .string()
+            .trim()
+            .regex(/^\d{4}$/, 'PIN должен состоять из 4 цифр'),
+        newPin: z
+            .string()
+            .trim()
+            .regex(/^\d{4}$/, 'PIN должен состоять из 4 цифр'),
+    })
+    .strict()
+    .refine((data) => data.oldPin !== data.newPin, {
+        message: 'Новый PIN должен отличаться от старого',
+        path: ['newPin'],
+    });
+
 export type VerifyPinPayload = z.infer<typeof verifyPinSchema>;
 export type TelegramAuthPayload = z.infer<typeof telegramAuthSchema>;
+export type ChangePinPayload = z.infer<typeof changePinSchema>;
+

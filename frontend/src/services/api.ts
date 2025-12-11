@@ -55,7 +55,16 @@ const api: AxiosInstance = axios.create({
     },
 });
 
+import { setupRetryInterceptor } from './retryInterceptor';
+
 initOfflineSync(api);
+
+// SVC-R01: Setup retry interceptor for 5xx errors with exponential backoff
+setupRetryInterceptor(api, {
+    maxRetries: 3,
+    baseDelay: 1000,
+    maxDelay: 10000,
+});
 
 const baseAdapter = api.defaults.adapter;
 if (typeof baseAdapter === 'function') {
@@ -295,16 +304,23 @@ export interface ApiClient {
     // Profile
     getProfileSummary: () => Promise<ProfileSummary>;
     updatePreferences: (payload: Record<string, any>) => Promise<ProfileSummary>;
+    updateProfile: (payload: Partial<import('@backend-types/api/shared').Profile>) => Promise<ProfileSummary>;
     getThemePalette: () => Promise<ThemePaletteResponse>;
     updateThemePalette: (palette: ThemePalette) => Promise<ThemePaletteResponse>;
+    changePin: (currentPin: string, newPin: string) => Promise<{ message: string; changed_at: string }>;
+    clearServerCache: () => Promise<{ message: string; invalidated: string[]; timestamp: string }>;
 
     // Sessions
     getTodaySession: (date?: string) => Promise<SessionTodayResponse>;
     getWeekPlan: (date?: string) => Promise<SessionWeekResponse>;
+    getPreviousSession: (beforeDate?: string) => Promise<TrainingSession | null>;
     getSession: (id: string) => Promise<TrainingSession>;
     createSession: (payload: CreateSessionPayload) => Promise<TrainingSession>;
     updateSession: (id: string, payload: UpdateSessionPayload) => Promise<TrainingSession>;
     deleteSession: (id: string) => Promise<void>;
+    getHistory: (page?: number, pageSize?: number) => Promise<{ items: TrainingSession[] }>;
+    // WEEK-F02: Reset week to original plan
+    resetWeekPlan: (date?: string) => Promise<{ message: string; deleted: number; regenerated: number }>;
 
     // Reports
     getReport: <TReport extends ReportData = ReportData>(slug: string, params?: Record<string, any>) => Promise<TReport>;
@@ -312,11 +328,14 @@ export interface ApiClient {
     // Achievements
     getAchievements: (params?: AchievementQueryParams) => Promise<AchievementResponse>;
 
-    // Exercises
     getExerciseCatalog: () => Promise<{ items: ExerciseCatalogItem[] } | ExerciseCatalogItem[]>;
     getExerciseHistory: (exerciseKey: string) => Promise<{ items: ExerciseHistoryItem[] } | ExerciseHistoryItem[]>;
     getExerciseLevels: (exerciseKey: string) => Promise<{ items: ExerciseLevel[] }>;
     getProgramExercises: (programId?: string, disciplineId?: string) => Promise<ProgramExercise[]>;
+
+    // Favorites
+    getFavorites: () => Promise<{ items: string[] }>;
+    toggleFavorite: (exerciseKey: string) => Promise<{ isFavorite: boolean; exerciseKey: string }>;
 
     // Training Programs
     getTrainingDisciplines: () => Promise<TrainingDiscipline[]>;
@@ -339,6 +358,9 @@ export interface ApiClient {
 
     // Analytics
     getAnalyticsVisualization: (type: VisualizationType, filters?: AnalyticsFilters) => Promise<VisualizationResponse>;
+
+    // Core
+    streamRequest: (endpoint: string, payload: any, onEvent: (event: { type: string; data: any }) => void) => Promise<void>;
 }
 
 export const apiClient: ApiClient = {
@@ -436,6 +458,14 @@ export const apiClient: ApiClient = {
             throw ErrorHandler.handle(error, 'updatePreferences');
         }
     },
+    updateProfile: async (payload: Partial<import('@backend-types/api/shared').Profile>) => {
+        try {
+            const response = await api.patch<ProfileSummary>('/profile', payload);
+            return response.data;
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'updateProfile');
+        }
+    },
     getThemePalette: async () => {
         try {
             const response = await api.get<{ data: ThemePaletteResponse }>('/profile/theme');
@@ -450,6 +480,28 @@ export const apiClient: ApiClient = {
             return unwrapApiData<ThemePaletteResponse>(response.data);
         } catch (error) {
             throw ErrorHandler.handle(error, 'updateThemePalette');
+        }
+    },
+    // SETT-F01: Change PIN via authenticated endpoint
+    changePin: async (currentPin: string, newPin: string) => {
+        try {
+            const response = await api.post<{ data: { success: boolean; message: string } }>('/auth/change-pin', {
+                oldPin: currentPin,
+                newPin: newPin,
+            });
+            const result = unwrapApiData<{ success: boolean; message: string }>(response.data);
+            return { message: result.message, changed_at: new Date().toISOString() };
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'changePin');
+        }
+    },
+
+    clearServerCache: async () => {
+        try {
+            const response = await api.delete<{ data: { message: string; invalidated: string[]; timestamp: string } }>('/profile/cache');
+            return unwrapApiData<{ message: string; invalidated: string[]; timestamp: string }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'clearServerCache');
         }
     },
 
@@ -470,6 +522,17 @@ export const apiClient: ApiClient = {
             return unwrapApiData<SessionWeekResponse>(response.data);
         } catch (error) {
             throw ErrorHandler.handle(error, 'getWeekPlan');
+        }
+    },
+    // Get most recent session before given date for comparison (GAP-002)
+    getPreviousSession: async (beforeDate?: string): Promise<TrainingSession | null> => {
+        try {
+            const suffix = beforeDate ? `?date=${encodeURIComponent(beforeDate)}` : '';
+            const response = await api.get<{ data: { session: TrainingSession | null } }>(`/sessions/previous${suffix}`);
+            const unwrapped = unwrapApiData<{ session: TrainingSession | null }>(response.data);
+            return unwrapped.session;
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getPreviousSession');
         }
     },
     getSession: async (id: string) => {
@@ -505,6 +568,28 @@ export const apiClient: ApiClient = {
             await api.delete<void>(`/sessions/${id}`);
         } catch (error) {
             throw ErrorHandler.handle(error, 'deleteSession');
+        }
+    },
+
+    getHistory: async (page = 1, pageSize = 20) => {
+        try {
+            const response = await api.get<{ data: { items: TrainingSession[] } }>(`/sessions/history?page=${page}&pageSize=${pageSize}`);
+            return unwrapApiData<{ items: TrainingSession[] }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getHistory');
+        }
+    },
+
+    // WEEK-F02: Reset week to original plan
+    resetWeekPlan: async (date?: string) => {
+        try {
+            const params = date ? `?date=${date}` : '';
+            const response = await api.post<{ data: { message: string; deleted: number; regenerated: number } }>(
+                `/sessions/week/reset${params}`
+            );
+            return unwrapApiData<{ message: string; deleted: number; regenerated: number }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'resetWeekPlan');
         }
     },
 
@@ -639,6 +724,26 @@ export const apiClient: ApiClient = {
         }
     },
 
+    // Favorites
+    getFavorites: async () => {
+        try {
+            const response = await api.get<{ data: { items: string[] } }>('/exercises/favorites');
+            return unwrapApiData<{ items: string[] }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getFavorites');
+        }
+    },
+    toggleFavorite: async (exerciseKey: string) => {
+        try {
+            const response = await api.post<{ data: { isFavorite: boolean; exerciseKey: string } }>(
+                `/exercises/favorites/${encodeURIComponent(exerciseKey)}/toggle`
+            );
+            return unwrapApiData<{ isFavorite: boolean; exerciseKey: string }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'toggleFavorite');
+        }
+    },
+
     // Training Programs
     getTrainingDisciplines: async () => {
         try {
@@ -713,6 +818,83 @@ export const apiClient: ApiClient = {
             return response.data;
         } catch (error) {
             throw ErrorHandler.handle(error, 'assistantReply');
+        }
+    },
+    streamRequest: async (endpoint: string, payload: any, onEvent: (event: { type: string; data: any }) => void) => {
+        const url = `${normalizeApiBaseURL()}${endpoint}`;
+        const headers: HeadersInit = {
+            'Content-Type': 'application/json',
+        };
+
+        // Add auth headers manually since we use fetch
+        if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+        }
+        if (telegramInitData) {
+            headers['X-Telegram-Init-Data'] = telegramInitData;
+        }
+        if (telegramUserId) {
+            headers['X-Telegram-Id'] = String(telegramUserId);
+        }
+        if (profileIdOverride) {
+            headers['X-Profile-Id'] = profileIdOverride;
+        }
+        if (csrfToken) {
+            headers['X-CSRF-Token'] = csrfToken;
+        }
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                let errorMessage = 'Network error';
+                try {
+                    const errorJson = JSON.parse(errorText);
+                    errorMessage = errorJson.message || errorMessage;
+                } catch { }
+                throw new Error(errorMessage);
+            }
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+
+            if (!reader) throw new Error('Response body is not readable');
+
+            let buffer = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                buffer += chunk;
+
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop() || ''; // Keep incomplete part
+
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        const parts = line.split('\n');
+                        const eventType = parts[0].replace('event: ', '').trim();
+                        const dataLine = parts.find(l => l.startsWith('data: '));
+                        if (dataLine) {
+                            const dataStr = dataLine.replace('data: ', '').trim();
+                            try {
+                                const data = JSON.parse(dataStr);
+                                onEvent({ type: eventType, data });
+                            } catch (e) {
+                                console.error('SSE Parse Error', e);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'streamRequest');
         }
     },
     getAssistantSessionState: async () => {

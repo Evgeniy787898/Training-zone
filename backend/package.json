@@ -6,6 +6,7 @@
     "type": "module",
     "scripts": {
         "dev": "tsx watch src/index.ts",
+        "dev:bot": "tsx watch src/bot/index.ts",
         "build": "tsc",
         "start": "node dist/index.js",
         "db:generate": "prisma generate",
@@ -43,8 +44,10 @@
         "lint": "eslint \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\""
     },
     "dependencies": {
+        "@google/generative-ai": "^0.24.1",
         "@prisma/client": "^5.7.0",
         "@supabase/supabase-js": "^2.86.0",
+        "@types/multer": "^2.0.0",
         "cors": "^2.8.5",
         "date-fns": "^3.0.0",
         "dotenv": "^16.6.1",
@@ -53,7 +56,9 @@
         "http-proxy-middleware": "^3.0.5",
         "ioredis": "^5.8.2",
         "jsonwebtoken": "^9.0.2",
+        "jszip": "^3.10.1",
         "morgan": "^1.10.0",
+        "multer": "^2.0.2",
         "pino": "^10.1.0",
         "pino-http": "^11.0.0",
         "swagger-ui-express": "^5.0.1",

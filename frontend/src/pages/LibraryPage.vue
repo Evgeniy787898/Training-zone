@@ -1,5 +1,11 @@
 <template>
   <div class="page-shell library-page">
+    <!-- Background -->
+    <div class="page-bg">
+      <div class="page-bg__grid"></div>
+      <div class="page-bg__glow page-bg__glow--1"></div>
+      <div class="page-bg__glow page-bg__glow--2"></div>
+    </div>
     <header class="page-header library-page__header">
       <div>
         <h1 class="page-title">
@@ -9,271 +15,118 @@
             variant="violet"
             :size="28"
           />
-          <span>Информационный стенд</span>
+          <span>Библиотека упражнений</span>
         </h1>
         <p class="page-subtitle">
-          Всё, что нужно для осознанных тренировок: база калистеники, структура занятий и быстрые шпаргалки.
+          База знаний калистеники: техника, прогрессии и рекомендации.
         </p>
       </div>
     </header>
 
-    <section class="surface-card library-card">
-      <header class="surface-card__header">
-        <div class="surface-card__title">
-          <NeonIcon name="spark" variant="lime" :size="22" class="library-card__title-icon" />
-          <span>Калистеника — твоя база силы</span>
-        </div>
-      </header>
-      <p class="library-card__text">
-        Развиваем силу, контроль и выносливость без сложного инвентаря. План подстраивается под цели и оборудование. Отмечай
-        результат в отчёте — так алгоритм корректирует уровень и объём.
-      </p>
-      <ul class="list-reset library-highlights">
-        <li>
-          <NeonIcon name="calendar" variant="lime" :size="18" />
-          <span>3–5 тренировок в неделю</span>
-        </li>
-        <li>
-          <NeonIcon name="hex" variant="violet" :size="18" />
-          <span>Баланс «нагрузка → восстановление»</span>
-        </li>
-        <li>
-          <NeonIcon name="spark" variant="emerald" :size="18" />
-          <span>Прогрессия по уровням упражнений</span>
-        </li>
-      </ul>
-    </section>
-
-    <div class="page-grid page-grid--two library-grid">
-      <section
-        v-for="section in knowledgeSections"
-        :key="section.title"
-        class="surface-card library-section"
-      >
-        <header class="library-section__header">
-          <h2>{{ section.title }}</h2>
-          <p>{{ section.description }}</p>
-        </header>
-        <ul class="list-reset library-section__list">
-          <li v-for="item in section.highlights" :key="item.text">
-            <NeonIcon :name="item.icon.name" :variant="item.icon.variant" :size="18" />
-            <span>{{ item.text }}</span>
-          </li>
-        </ul>
-      </section>
+    <div class="library-container">
+      <ExerciseLibrary
+        :exercises="exercises"
+        :loading="loading"
+        @select-exercise="openExerciseDetails"
+        @toggle-favorite="handleToggleFavorite"
+      />
     </div>
 
-    <section class="surface-card library-card">
-      <header class="surface-card__header">
-        <div class="surface-card__title">
-          <NeonIcon name="spark" variant="lime" :size="22" class="library-card__title-icon" />
-          <span>Быстрые наборы и шпаргалки</span>
-        </div>
-      </header>
-      <div class="library-tips">
-        <article v-for="tip in quickTips" :key="tip.title" class="library-tip">
-          <h3>{{ tip.title }}</h3>
-          <p>{{ tip.description }}</p>
-          <ul class="list-reset">
-            <li v-for="item in tip.items" :key="item">• {{ item }}</li>
-          </ul>
-        </article>
-      </div>
-    </section>
+    <!-- Error State -->
+    <div v-if="error" class="page-error center-msg">
+      <p>Не удалось загрузить библиотеку</p>
+      <button class="btn btn-primary" @click="loadLibrary">Повторить</button>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import NeonIcon from '@/modules/shared/components/NeonIcon.vue';
+import { ref, onMounted } from 'vue';
+import { cachedApiClient } from '@/services/cachedApi';
 import AppIcon from '@/modules/shared/components/AppIcon.vue';
-import type { IconName } from '@/modules/shared/icons/registry';
+import ExerciseLibrary from '@/modules/knowledge/components/ExerciseLibrary.vue';
+import type { ExerciseCatalogItem } from '@/types';
+import ErrorHandler from '@/services/errorHandler';
 
-type NeonIconVariant = 'lime' | 'emerald' | 'violet' | 'amber' | 'aqua' | 'neutral';
+const exercises = ref<ExerciseCatalogItem[]>([]);
+const loading = ref(true);
+const error = ref<string | null>(null);
 
-interface KnowledgeSectionHighlight {
-  icon: { name: IconName; variant: NeonIconVariant };
-  text: string;
-}
+const loadLibrary = async () => {
+  loading.value = true;
+  error.value = null;
+  try {
+    const response = await cachedApiClient.getExerciseCatalog();
+    // Handle both array and object response format just in case
+    exercises.value = Array.isArray(response) ? response : (response as any).items || [];
+  } catch (err: any) {
+    error.value = 'Failed to load library';
+    ErrorHandler.handleWithToast(err, 'LibraryPage.loadLibrary');
+  } finally {
+    loading.value = false;
+  }
+};
 
-interface KnowledgeSection {
-  title: string;
-  description: string;
-  highlights: KnowledgeSectionHighlight[];
-}
+const openExerciseDetails = (exercise: ExerciseCatalogItem) => {
+  // TODO: Navigate to exercise details or open modal
+  console.log('Open exercise:', exercise.title);
+  // Initial implementation: functional placeholder
+};
 
-const knowledgeSections: KnowledgeSection[] = [
-  {
-    title: 'Основы калистеники',
-    description: 'Работаем с собственным весом, опираемся на прогрессию и качество техники.',
-    highlights: [
-      { icon: { name: 'spark', variant: 'emerald' }, text: 'Постепенно усложняй: добавляй объём или уровень только после уверенного прохождения.' },
-      { icon: { name: 'spark', variant: 'violet' }, text: 'Контролируй технику и темп (3-1-1-0) — качество движения важнее скорости.' },
-      { icon: { name: 'rest', variant: 'aqua' }, text: 'Отслеживай самочувствие: усталость допустима, боль — сигнал упростить.' },
-    ],
-  },
-  {
-    title: 'Структура тренировки',
-    description: 'Каждый блок выполняет свою роль: подготовить, нагрузить и восстановить.',
-    highlights: [
-      { icon: { name: 'rest', variant: 'aqua' }, text: 'Разминка 5–7 минут — суставная гимнастика, лёгкое кардио, резинки.' },
-      { icon: { name: 'pulse', variant: 'lime' }, text: 'Основная часть: 2–4 упражнения, темп и объём подстраиваем под RPE.' },
-      { icon: { name: 'crescent', variant: 'emerald' }, text: 'Заминка: дыхание и растяжка рабочих мышц, чтобы ускорить восстановление.' },
-    ],
-  },
-  {
-    title: 'Продвижение по уровням',
-    description: 'Фиксируем прогресс через отчёты и рекомендации бота.',
-    highlights: [
-      { icon: { name: 'rocket', variant: 'lime' }, text: 'RPE ≤7 и запас по повторениям — переходи на следующий уровень.' },
-      { icon: { name: 'target', variant: 'violet' }, text: 'RPE 8–9 — закрепляем навык, повторяем тот же уровень.' },
-      { icon: { name: 'reset', variant: 'amber' }, text: 'Если RPE 10 или техника рушится, смело упрощай и отрабатывай форму.' },
-    ],
-  },
-  {
-    title: 'Режим восстановления',
-    description: 'Нагрузку и отдых чередуем осознанно — так прогресс держится стабильно.',
-    highlights: [
-      { icon: { name: 'crescent', variant: 'emerald' }, text: 'Раз в неделю планируй день восстановления с мягкой мобилизацией.' },
-      { icon: { name: 'info', variant: 'neutral' }, text: 'Если самочувствие просело, включи режим восстановления в приложении или через чат.' },
-      { icon: { name: 'rest', variant: 'aqua' }, text: 'Боль или травма — уменьшай объём, работай над техникой и сообщай тренеру.' },
-    ],
-  },
-];
+const handleToggleFavorite = async (exerciseKey: string) => {
+  // TODO: Implement API call to save favorite
+  console.log('Toggle favorite:', exerciseKey);
+};
 
-const quickTips = [
-  {
-    title: 'Мини-калистеника',
-    description: 'Комплекс из трёх упражнений, который можно выполнить без оборудования.',
-    items: [
-      'Отжимания от стены — 3×12',
-      'Приседания с поддержкой — 3×15',
-      'Планка на предплечьях — 3×40 сек',
-    ],
-  },
-  {
-    title: 'Контроль RPE',
-    description: 'Шкала нагрузки помогает дозировать тренировку и держать баланс нагрузки.',
-    items: [
-      '5 — умеренно, готов повторить',
-      '7 — тяжело, но техника под контролем',
-      '9 — почти предел, снижаем объём в следующий раз',
-    ],
-  },
-  {
-    title: 'Ритуалы восстановления',
-    description: 'Два-три действия после тренировки ускорят возвращение в тонус.',
-    items: [
-      'Замедленное дыхание 2 минуты',
-      'Лёгкая растяжка рабочих мышц',
-      'Заметка о самочувствии в отчёте',
-    ],
-  },
-];
+onMounted(() => {
+  loadLibrary();
+});
 </script>
 
 <style scoped>
 .library-page {
-  gap: clamp(1.5rem, 4vw, 2.5rem);
+  position: relative;
+  gap: var(--space-lg);
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
 }
 
-.library-card {
-  gap: clamp(1rem, 3vw, 1.75rem);
+/* Background */
+.page-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
 }
-
-.library-card__title-icon {
-  filter: drop-shadow(0 6px 12px rgba(79, 70, 229, 0.25));
+.page-bg__grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
-
-.library-card__text {
-  margin: 0;
-  color: var(--color-text-secondary);
-  line-height: 1.6;
+.page-bg__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.25;
 }
+.page-bg__glow--1 { width: 180px; height: 180px; top: -40px; right: -20px; background: var(--color-accent); }
+.page-bg__glow--2 { width: 140px; height: 140px; bottom: 25%; left: -30px; background: #a855f7; }
 
-.library-highlights {
+.center-msg {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-md);
-  color: var(--color-text-secondary);
-}
-
-.library-highlights li {
-  display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-xs);
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
-  border: 1px solid var(--color-border-subtle);
-}
-
-.library-grid {
-  align-items: stretch;
-}
-
-.library-section {
-  gap: var(--space-md);
-}
-
-.library-section__header h2 {
-  margin: 0 0 0.5rem;
-  font-size: var(--font-size-xl);
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.library-section__header p {
-  margin: 0;
+  gap: 1rem;
+  padding: 2rem;
   color: var(--color-text-secondary);
-  line-height: 1.5;
 }
 
-.library-section__list {
+.library-container {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
-  color: var(--color-text-secondary);
-}
-
-.library-section__list li {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-sm);
-  line-height: 1.5;
-}
-
-.library-tips {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: clamp(1rem, 3vw, 1.5rem);
-}
-
-.library-tip {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  padding: 1rem;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-border-subtle);
-  background: color-mix(in srgb, var(--color-bg-elevated) 92%, transparent);
-}
-
-.library-tip h3 {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-}
-
-.library-tip p {
-  margin: 0;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-}
-
-.library-tip ul {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
-  color: var(--color-text-secondary);
+  width: 100%;
 }
 </style>

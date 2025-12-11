@@ -1,0 +1,254 @@
+/**
+ * Animated Mesh Gradients Background (DS-V03)
+ * 
+ * Dynamic mesh gradients that animate and react to time-of-day:
+ * - Morning: Warm tones (orange, yellow)
+ * - Day: Neutral tones (blue, cyan)
+ * - Evening: Cool tones (purple, pink)
+ * - Night: Dark tones (deep blue, violet)
+ */
+
+/* ============================================
+   MESH GRADIENT BASE
+   ============================================ */
+
+.mesh-gradient-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+/* ============================================
+   ANIMATED BLOBS
+   ============================================ */
+
+.mesh-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.6;
+    mix-blend-mode: soft-light;
+}
+
+/* Blob 1 - Large */
+.mesh-blob-1 {
+    width: 60vmax;
+    height: 60vmax;
+    top: -20%;
+    left: -10%;
+    animation: blob-float-1 25s ease-in-out infinite;
+}
+
+/* Blob 2 - Medium */
+.mesh-blob-2 {
+    width: 40vmax;
+    height: 40vmax;
+    top: 50%;
+    right: -15%;
+    animation: blob-float-2 30s ease-in-out infinite;
+}
+
+/* Blob 3 - Small */
+.mesh-blob-3 {
+    width: 30vmax;
+    height: 30vmax;
+    bottom: -10%;
+    left: 30%;
+    animation: blob-float-3 20s ease-in-out infinite;
+}
+
+/* ============================================
+   BLOB ANIMATIONS
+   ============================================ */
+
+@keyframes blob-float-1 {
+
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+    }
+
+    25% {
+        transform: translate(10%, 5%) scale(1.05);
+    }
+
+    50% {
+        transform: translate(5%, 10%) scale(0.95);
+    }
+
+    75% {
+        transform: translate(-5%, 5%) scale(1.02);
+    }
+}
+
+@keyframes blob-float-2 {
+
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1) rotate(0deg);
+    }
+
+    33% {
+        transform: translate(-10%, -10%) scale(1.1) rotate(10deg);
+    }
+
+    66% {
+        transform: translate(5%, -5%) scale(0.95) rotate(-5deg);
+    }
+}
+
+@keyframes blob-float-3 {
+
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+    }
+
+    50% {
+        transform: translate(-10%, -15%) scale(1.15);
+    }
+}
+
+/* ============================================
+   TIME-BASED COLOR THEMES
+   ============================================ */
+
+/* Morning (6am - 12pm) - Warm tones */
+.mesh-theme-morning .mesh-blob-1 {
+    background: linear-gradient(135deg,
+            hsla(35, 90%, 55%, 0.8),
+            hsla(45, 95%, 60%, 0.6));
+}
+
+.mesh-theme-morning .mesh-blob-2 {
+    background: linear-gradient(135deg,
+            hsla(25, 85%, 60%, 0.7),
+            hsla(15, 90%, 50%, 0.5));
+}
+
+.mesh-theme-morning .mesh-blob-3 {
+    background: linear-gradient(135deg,
+            hsla(50, 80%, 65%, 0.6),
+            hsla(40, 85%, 55%, 0.4));
+}
+
+/* Day (12pm - 6pm) - Neutral/Blue tones */
+.mesh-theme-day .mesh-blob-1 {
+    background: linear-gradient(135deg,
+            hsla(200, 80%, 55%, 0.7),
+            hsla(210, 85%, 60%, 0.5));
+}
+
+.mesh-theme-day .mesh-blob-2 {
+    background: linear-gradient(135deg,
+            hsla(180, 70%, 50%, 0.6),
+            hsla(190, 75%, 55%, 0.4));
+}
+
+.mesh-theme-day .mesh-blob-3 {
+    background: linear-gradient(135deg,
+            hsla(220, 75%, 60%, 0.5),
+            hsla(230, 80%, 65%, 0.3));
+}
+
+/* Evening (6pm - 10pm) - Purple/Pink tones */
+.mesh-theme-evening .mesh-blob-1 {
+    background: linear-gradient(135deg,
+            hsla(280, 70%, 55%, 0.7),
+            hsla(300, 75%, 50%, 0.5));
+}
+
+.mesh-theme-evening .mesh-blob-2 {
+    background: linear-gradient(135deg,
+            hsla(320, 65%, 50%, 0.6),
+            hsla(340, 70%, 55%, 0.4));
+}
+
+.mesh-theme-evening .mesh-blob-3 {
+    background: linear-gradient(135deg,
+            hsla(260, 60%, 60%, 0.5),
+            hsla(270, 65%, 55%, 0.3));
+}
+
+/* Night (10pm - 6am) - Deep dark tones */
+.mesh-theme-night .mesh-blob-1 {
+    background: linear-gradient(135deg,
+            hsla(240, 50%, 25%, 0.6),
+            hsla(260, 55%, 30%, 0.4));
+}
+
+.mesh-theme-night .mesh-blob-2 {
+    background: linear-gradient(135deg,
+            hsla(270, 45%, 20%, 0.5),
+            hsla(280, 50%, 25%, 0.3));
+}
+
+.mesh-theme-night .mesh-blob-3 {
+    background: linear-gradient(135deg,
+            hsla(220, 40%, 20%, 0.4),
+            hsla(230, 45%, 25%, 0.2));
+}
+
+/* ============================================
+   DARK MODE ADJUSTMENTS
+   ============================================ */
+
+.dark .mesh-blob {
+    opacity: 0.4;
+    mix-blend-mode: screen;
+}
+
+/* ============================================
+   STATIC MESH GRADIENT (simpler alternative)
+   ============================================ */
+
+.mesh-gradient-static {
+    background:
+        radial-gradient(at 40% 20%, hsla(262, 83%, 58%, 0.2) 0px, transparent 50%),
+        radial-gradient(at 80% 0%, hsla(189, 100%, 56%, 0.15) 0px, transparent 50%),
+        radial-gradient(at 0% 50%, hsla(355, 100%, 93%, 0.15) 0px, transparent 50%),
+        radial-gradient(at 80% 50%, hsla(340, 100%, 76%, 0.1) 0px, transparent 50%),
+        radial-gradient(at 0% 100%, hsla(22, 100%, 77%, 0.1) 0px, transparent 50%),
+        radial-gradient(at 80% 100%, hsla(242, 100%, 70%, 0.1) 0px, transparent 50%),
+        radial-gradient(at 0% 0%, hsla(343, 100%, 76%, 0.1) 0px, transparent 50%);
+}
+
+.dark .mesh-gradient-static {
+    background:
+        radial-gradient(at 40% 20%, hsla(262, 83%, 30%, 0.3) 0px, transparent 50%),
+        radial-gradient(at 80% 0%, hsla(189, 100%, 30%, 0.2) 0px, transparent 50%),
+        radial-gradient(at 0% 50%, hsla(355, 100%, 40%, 0.15) 0px, transparent 50%),
+        radial-gradient(at 80% 50%, hsla(340, 100%, 35%, 0.1) 0px, transparent 50%);
+}
+
+/* ============================================
+   PERFORMANCE: Reduce motion
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+    .mesh-blob {
+        animation: none;
+    }
+}
+
+/* ============================================
+   UTILITY: Toggle mesh gradient
+   ============================================ */
+
+.mesh-gradient-hidden {
+    display: none;
+}
+
+.mesh-gradient-subtle .mesh-blob {
+    opacity: 0.3;
+}
+
+.mesh-gradient-intense .mesh-blob {
+    opacity: 0.8;
+    filter: blur(60px);
+}

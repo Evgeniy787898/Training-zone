@@ -1,5 +1,11 @@
 <template>
   <div class="page-shell report-page">
+    <!-- Background -->
+    <div class="page-bg">
+      <div class="page-bg__grid"></div>
+      <div class="page-bg__glow page-bg__glow--1"></div>
+      <div class="page-bg__glow page-bg__glow--2"></div>
+    </div>
     <header class="page-header report-page__header">
       <div class="report-page__title">
         <h1 class="page-title">
@@ -106,13 +112,23 @@
                 <NeonIcon name="target" variant="emerald" :size="22" />
                 <span>{{ index + 1 }}. {{ exercise.name }}</span>
               </div>
-              <span
-                v-if="exercise.target?.sets"
-                class="report-exercise__plan"
-                :id="getExercisePlanId(index)"
-              >
-                План: {{ exercise.target.sets }} × {{ exercise.target.reps || '—' }}
-              </span>
+              <div class="report-exercise__meta">
+                <span
+                  v-if="exercise.target?.sets"
+                  class="report-exercise__plan"
+                  :id="getExercisePlanId(index)"
+                >
+                  План: {{ exercise.target.sets }} × {{ exercise.target.reps || '—' }}
+                </span>
+                <span
+                  v-if="getExtensionDelta(exercise.key)?.hasChange"
+                  class="report-exercise__delta"
+                  :class="getDeltaClass(exercise.key)"
+                  :title="'Сравнение с предыдущей тренировкой'"
+                >
+                  {{ getExtensionDelta(exercise.key)?.label }}
+                </span>
+              </div>
             </header>
 
             <div class="report-exercise__grid">
@@ -199,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useAppStore } from '@/stores/app';
@@ -209,6 +225,8 @@ import AppIcon from '@/modules/shared/components/AppIcon.vue';
 import ErrorState from '@/modules/shared/components/ErrorState.vue';
 import SkeletonCard from '@/modules/shared/components/SkeletonCard.vue';
 import FormField from '@/modules/shared/components/FormField.vue';
+import { calculateProgressDelta, getProgressClass } from '@/utils/progress-utils';
+import { validateReportForm } from '@/utils/report-schema';
 
 const appStore = useAppStore();
 const { showToast, refreshProfile } = appStore;
@@ -225,6 +243,7 @@ interface Exercise {
 const loading = ref(true);
 const error = ref<Error | null>(null);
 const session = ref<any>(null);
+const previousSession = ref<any>(null);
 const source = ref<string | null>(null);
 const fallback = ref(false);
 const saving = ref(false);
@@ -301,10 +320,14 @@ const loadSession = async () => {
 
   try {
     const today = format(new Date(), 'yyyy-MM-dd');
-    const data = await apiClient.getTodaySession(today);
-    session.value = data.session;
-    source.value = data.source ?? null;
-    fallback.value = data.source !== 'database';
+    const [todayData, prevData] = await Promise.all([
+      apiClient.getTodaySession(today),
+      apiClient.getPreviousSession(today).catch(() => null),
+    ]);
+    session.value = todayData.session;
+    source.value = todayData.source ?? null;
+    fallback.value = todayData.source !== 'database';
+    previousSession.value = prevData;
   } catch (err: any) {
     error.value = err;
     const notFound = err?.code === 'NOT_FOUND_ERROR' || err?.response?.status === 404;
@@ -321,6 +344,33 @@ const loadSession = async () => {
   }
 };
 
+// GAP-002: Compute delta using utility
+const getExtensionDelta = (exerciseKey: string) => {
+  if (!previousSession.value?.exercises) return null;
+  const prevExercise = previousSession.value.exercises.find(
+    (e: any) => e.exercise_key === exerciseKey
+  );
+  
+  const currEntry = form.value.exercises[exerciseKey];
+  if (!currEntry) return null;
+
+  return calculateProgressDelta(
+    {
+      sets: currEntry.sets,
+      reps: currEntry.reps,
+      // weight: currEntry.weight // Future support
+    },
+    prevExercise
+  );
+};
+
+const getDeltaClass = (exerciseKey: string): string => {
+  const delta = getExtensionDelta(exerciseKey);
+  const className = getProgressClass(delta);
+  if (!className) return '';
+  return `report-exercise__delta--${className}`;
+};
+
 watch(session, (newSession) => {
   if (newSession) {
     form.value = buildFormFromSession(newSession);
@@ -333,6 +383,18 @@ const handleSubmit = async () => {
       title: 'Демо режим',
       message: 'В режиме предпросмотра отчёт не отправляется на сервер. Открой приложение из Telegram для реального отчёта.',
       type: 'warning',
+    });
+    return;
+  }
+
+  // Validate form with Zod schema
+  const validation = validateReportForm(form.value);
+  if (!validation.success) {
+    const firstError = Object.values(validation.errors || {})[0] || 'Ошибка валидации';
+    showToast({
+      title: 'Проверьте данные',
+      message: firstError,
+      type: 'error',
     });
     return;
   }
@@ -399,15 +461,50 @@ const handleSubmit = async () => {
   }
 };
 
-onMounted(() => {
-  loadSession();
+onMounted(async () => {
+  await loadSession();
+  
+  // REP-U01: Auto-focus on first exercise input after data loads
+  await nextTick();
+  if (exercises.value.length > 0) {
+    const firstExerciseKey = exercises.value[0].key;
+    const firstInputId = getExerciseInputId(firstExerciseKey, 'sets');
+    const firstInput = document.getElementById(firstInputId);
+    if (firstInput) {
+      firstInput.focus();
+    }
+  }
 });
 </script>
 
 <style scoped>
 .report-page {
+  position: relative;
   gap: clamp(1.5rem, 4vw, 2.5rem);
 }
+
+/* Background */
+.page-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.page-bg__grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.page-bg__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.25;
+}
+.page-bg__glow--1 { width: 180px; height: 180px; top: -40px; right: -20px; background: var(--color-accent); }
+.page-bg__glow--2 { width: 140px; height: 140px; bottom: 25%; left: -30px; background: #a855f7; }
 
 .report-page__title {
   display: flex;
@@ -635,6 +732,30 @@ onMounted(() => {
   color: var(--color-text-secondary);
   position: relative;
   z-index: 1;
+}
+
+.report-exercise__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  align-items: center;
+}
+
+.report-exercise__delta {
+  font-size: var(--font-size-xs);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.report-exercise__delta--positive {
+  background: color-mix(in srgb, var(--color-success) 20%, transparent);
+  color: var(--color-success);
+}
+
+.report-exercise__delta--negative {
+  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+  color: var(--color-warning);
 }
 
 .report-exercise__grid {

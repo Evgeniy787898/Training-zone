@@ -108,6 +108,12 @@ const cacheStrategies = {
             `assistant:ai-advice:${profileId}:${fingerprint}`,
         scopeResolver: ({ profileId }: { profileId: string }) => profileId,
     },
+    analytics: {
+        ttlSeconds: cacheConfig.analytics.ttlSeconds,
+        buildKey: ({ profileId, type, range }: { profileId: string; type: string; range: string }) =>
+            `analytics:${profileId}:${type}:${range}`,
+        scopeResolver: ({ profileId }: { profileId: string }) => profileId,
+    },
 } satisfies Record<string, CacheStrategyEntry<any, any>>;
 
 

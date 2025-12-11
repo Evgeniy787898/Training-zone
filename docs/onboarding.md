@@ -83,9 +83,10 @@ pip install -r requirements.txt
 
 Скрипт автоматически:
 - ✅ Проверит все зависимости
+- ✅ Создаст Python venv и установит pip зависимости (CFG-001)
 - ✅ Запустит ngrok туннель
 - ✅ Запустит Docker контейнеры (PostgreSQL, Redis)
-- ✅ Запустит Backend, Frontend и микросервисы
+- ✅ Запустит Backend, Frontend и микросервисы (с hot-reload)
 - ✅ Покажет Ready баннер со всеми URL
 
 ---
@@ -264,4 +265,4 @@ pip install -r requirements.txt
 
 ---
 
-*Последнее обновление: 2025-12-05*
+*Последнее обновление: 2025-12-08*

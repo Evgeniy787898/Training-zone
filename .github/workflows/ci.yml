@@ -129,6 +129,9 @@ jobs:
       - name: Type check with MyPy
         run: mypy . --ignore-missing-imports || true
 
+      - name: Check dependencies
+        run: pip check
+
   # ==========================================
   # Security: Dependency Audit
   # ==========================================

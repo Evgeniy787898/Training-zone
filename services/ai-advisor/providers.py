@@ -1,8 +1,11 @@
-"""LLM provider helpers for the AI Advisor microservice."""
+"""LLM provider helpers for the AI Advisor microservice.
+
+Simplified Gemini-only implementation (MIGRATE-001).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional
 import logging
 
 
@@ -19,15 +22,6 @@ class ProviderUsage:
 class ProviderResult:
     text: str
     usage: Optional[ProviderUsage] = None
-
-
-class AdviceProvider(Protocol):
-    """Common interface for the downstream LLM providers."""
-
-    name: str
-
-    def generate(self, *, system_prompt: str, user_prompt: str) -> ProviderResult:
-        """Return the provider result for the provided prompts."""
 
 
 @dataclass(slots=True)
@@ -85,100 +79,9 @@ class ProviderAPIError(Exception):
         )
 
 
-class OpenAIAdviceProvider:
-    name = "openai"
-
-    def __init__(self, config: ProviderConfig, logger: logging.Logger):
-        from openai import OpenAI
-
-        self._config = config
-        self._client = OpenAI(api_key=config.api_key or None)
-        self._logger = logger
-
-    def generate(self, *, system_prompt: str, user_prompt: str) -> ProviderResult:
-        try:
-            completion = self._client.chat.completions.create(
-                model=self._config.model,
-                temperature=self._config.temperature,
-                max_tokens=self._config.max_output_tokens,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-        except Exception as exc:  # pragma: no cover - network errors handled at runtime
-            raise ProviderAPIError.from_exception("openai", exc) from exc
-
-        choice = completion.choices[0]
-        content = choice.message.content
-        if isinstance(content, list):
-            # The SDK may return a list of content parts; concatenate text blocks.
-            combined = "".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
-            )
-            self._logger.debug("openai content parts merged", extra={"parts": len(content)})
-            text = combined
-        else:
-            text = content or ""
-
-        usage = getattr(completion, "usage", None)
-        normalized_usage = None
-        if usage:
-            prompt_tokens = _safe_int(getattr(usage, "prompt_tokens", 0))
-            completion_tokens = _safe_int(getattr(usage, "completion_tokens", 0))
-            total_tokens = _safe_int(getattr(usage, "total_tokens", prompt_tokens + completion_tokens))
-            normalized_usage = ProviderUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-            )
-
-        return ProviderResult(text=text, usage=normalized_usage)
-
-
-class ClaudeAdviceProvider:
-    name = "claude"
-
-    def __init__(self, config: ProviderConfig):
-        import anthropic
-
-        self._config = config
-        self._client = anthropic.Anthropic(api_key=config.api_key)
-
-    def generate(self, *, system_prompt: str, user_prompt: str) -> ProviderResult:
-        try:
-            response = self._client.messages.create(
-                model=self._config.model,
-                temperature=self._config.temperature,
-                max_tokens=self._config.max_output_tokens,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-        except Exception as exc:  # pragma: no cover - network errors handled at runtime
-            raise ProviderAPIError.from_exception("claude", exc) from exc
-
-        text_chunks = []
-        for block in response.content:
-            block_type = getattr(block, "type", None)
-            if block_type == "text":
-                text_chunks.append(getattr(block, "text", ""))
-        usage = getattr(response, "usage", None)
-        normalized_usage = None
-        if usage:
-            prompt_tokens = _safe_int(getattr(usage, "input_tokens", 0))
-            completion_tokens = _safe_int(getattr(usage, "output_tokens", 0))
-            total_tokens = _safe_int(getattr(usage, "total_tokens", prompt_tokens + completion_tokens))
-            normalized_usage = ProviderUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-            )
-
-        return ProviderResult(text="".join(text_chunks), usage=normalized_usage)
-
-
 class GeminiAdviceProvider:
+    """Gemini LLM provider for AI advice generation."""
+    
     name = "gemini"
 
     def __init__(self, config: ProviderConfig, logger: logging.Logger):
@@ -229,31 +132,77 @@ class GeminiAdviceProvider:
             raise ProviderAPIError.from_exception("gemini", exc) from exc
 
 
-def create_provider(kind: str, config: ProviderConfig, logger: logging.Logger) -> AdviceProvider:
+def create_provider(kind: str, config: ProviderConfig, logger: logging.Logger) -> GeminiAdviceProvider:
+    """Create a Gemini provider instance.
+    
+    Note: Only Gemini is supported. Other provider names are accepted for
+    backward compatibility but will raise an error.
+    """
     normalized = kind.strip().lower()
-    if normalized in {"openai", "gpt"}:
-        return OpenAIAdviceProvider(config, logger)
-    if normalized in {"claude", "anthropic"}:
-        return ClaudeAdviceProvider(config)
     if normalized in {"gemini", "google"}:
         return GeminiAdviceProvider(config, logger)
-    raise ValueError(f"Unsupported AI provider: {kind}")
+    raise ValueError(
+        f"Unsupported AI provider: {kind}. "
+        "Only 'gemini' is supported. Set AI_ADVISOR_PROVIDER=gemini in .env"
+    )
+
+
+class ProviderWithFallback:
+    """Provider wrapper with model fallback (MS-002).
+    
+    Falls back from primary model (Flash) to backup model (Pro) on error.
+    """
+    
+    name = "gemini_with_fallback"
+    
+    def __init__(
+        self,
+        primary_config: ProviderConfig,
+        fallback_config: ProviderConfig,
+        logger: logging.Logger,
+    ):
+        self._primary = GeminiAdviceProvider(primary_config, logger)
+        self._fallback = GeminiAdviceProvider(fallback_config, logger)
+        self._logger = logger
+
+    def generate(self, *, system_prompt: str, user_prompt: str) -> ProviderResult:
+        """Generate with primary, fallback to secondary on error."""
+        try:
+            return self._primary.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        except ProviderAPIError as primary_err:
+            if not primary_err.retryable:
+                raise
+            
+            self._logger.warning(
+                "Primary model failed, trying fallback",
+                extra={
+                    "primaryError": primary_err.code,
+                    "primaryModel": self._primary._config.model,
+                    "fallbackModel": self._fallback._config.model,
+                },
+            )
+            
+            try:
+                result = self._fallback.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+                self._logger.info("Fallback model succeeded")
+                return result
+            except ProviderAPIError:
+                # Re-raise original error if fallback also fails
+                raise primary_err
 
 
 __all__ = [
-    "AdviceProvider",
+    "GeminiAdviceProvider",
     "ProviderConfig",
     "ProviderAPIError",
-    "OpenAIAdviceProvider",
-    "ClaudeAdviceProvider",
-    "create_provider",
     "ProviderResult",
     "ProviderUsage",
+    "ProviderWithFallback",
+    "create_provider",
 ]
-
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value) if value is not None else 0
-    except (TypeError, ValueError):
-        return 0

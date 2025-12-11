@@ -15,7 +15,7 @@ import { resolveIconComponent, type IconName } from '../icons/registry';
 interface Props {
   name: IconName;
   size?: number | string;
-  variant?: 'lime' | 'emerald' | 'violet' | 'amber' | 'aqua' | 'neutral' | 'accent' | 'success' | 'warning' | 'error' | 'info';
+  variant?: 'lime' | 'emerald' | 'violet' | 'amber' | 'aqua' | 'neutral' | 'accent' | 'success' | 'warning' | 'error' | 'info' | 'rose' | 'muted';
   tone?: 'solid' | 'ghost' | 'muted';
   label?: string;
 }
@@ -108,5 +108,13 @@ const iconComponent = computed(() => resolveIconComponent(props.name));
 
 .app-icon--info {
   color: var(--color-info);
+}
+
+.app-icon--rose {
+  color: var(--color-danger, #f43f5e);
+}
+
+.app-icon--muted {
+  color: var(--color-text-muted);
 }
 </style>

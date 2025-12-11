@@ -55,6 +55,7 @@ const SECRET_ENV_VARS = [
   'CSRF_SECRET',
   'CSRF_SECRET_PREVIOUS',
   'AI_ADVISOR_API_TOKEN',
+  'GEMINI_API_KEY',
 ];
 
 const readSecretValue = (name: string): string | undefined => {
@@ -143,6 +144,7 @@ const envSchema = z
     WEBAPP_URL: optionalHttpUrlString,
     MEDIA_BASE_URL: optionalHttpUrlString,
     MEDIA_CDN_BASE_URL: optionalHttpUrlString,
+    GEMINI_API_KEY: z.string().min(1, { message: 'GEMINI_API_KEY is required' }),
   })
   .passthrough()
   .superRefine((env, ctx) => {
@@ -348,13 +350,17 @@ export const env = validateEnvironment();
 
 export const config = {
   telegram: {
-    botToken: env.TELEGRAM_BOT_TOKEN,
+    botToken: process.env.TELEGRAM_BOT_TOKEN,
+    webappSecret: process.env.TELEGRAM_WEBAPP_SECRET,
     webhookUrl: env.TELEGRAM_WEBHOOK_URL,
     allowedUserIds: env.TELEGRAM_ALLOWED_IDS
       ? env.TELEGRAM_ALLOWED_IDS.split(',')
         .map((value) => value.trim())
         .filter(Boolean)
       : [],
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY!,
   },
   assistant: {
     engineId: 'internal',

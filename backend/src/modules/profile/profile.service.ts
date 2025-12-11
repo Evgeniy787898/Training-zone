@@ -1,8 +1,12 @@
 import type { Profile } from '@prisma/client';
 import type { ProfileRepository } from './profile.repository.js';
+import type { AuditService } from '../modules/security/audit.service.js';
 
 export class ProfileService {
-    constructor(private readonly profileRepository: ProfileRepository) { }
+    constructor(
+        private readonly profileRepository: ProfileRepository,
+        private readonly auditService: AuditService
+    ) { }
 
     async getOrCreateProfileByTelegram(
         telegramId: bigint,
@@ -16,6 +20,9 @@ export class ProfileService {
                 firstName: userData.firstName ?? null,
                 lastName: userData.lastName ?? null,
             });
+            await this.auditService.log('PROFILE_UPDATE', profile.id, 'SUCCESS', {
+                metadata: { action: 'create_profile', method: 'telegram' }
+            });
         } else {
             const updates: { firstName?: string; lastName?: string } = {};
             if (userData.firstName && profile.firstName !== userData.firstName) {
@@ -27,6 +34,9 @@ export class ProfileService {
 
             if (Object.keys(updates).length > 0) {
                 profile = await this.profileRepository.update(profile.id, updates);
+                await this.auditService.log('PROFILE_UPDATE', profile.id, 'SUCCESS', {
+                    metadata: { action: 'update_profile', fields: Object.keys(updates) }
+                });
             }
         }
 
@@ -58,10 +68,16 @@ export class ProfileService {
                 pinHash,
                 pinUpdatedAt: new Date(),
             });
+            await this.auditService.log('PROFILE_UPDATE', webProfile.id, 'SUCCESS', {
+                metadata: { action: 'create_web_profile' }
+            });
         } else {
             webProfile = await this.profileRepository.update(webProfile.id, {
                 pinHash,
                 pinUpdatedAt: new Date(),
+            });
+            await this.auditService.log('PIN_CHANGE', webProfile.id, 'SUCCESS', {
+                metadata: { action: 'update_web_pin' }
             });
         }
 
@@ -69,10 +85,12 @@ export class ProfileService {
     }
 
     async updatePin(profileId: string, pinHash: string): Promise<Profile> {
-        return this.profileRepository.update(profileId, {
+        const result = await this.profileRepository.update(profileId, {
             pinHash,
             pinUpdatedAt: new Date(),
         });
+        await this.auditService.log('PIN_CHANGE', profileId, 'SUCCESS', {});
+        return result;
     }
 
     async updatePreferences(id: string, data: {
@@ -81,7 +99,11 @@ export class ProfileService {
         timezone?: string | null;
         notificationsPaused?: boolean | null;
     }): Promise<Profile> {
-        return this.profileRepository.update(id, data as any);
+        const result = await this.profileRepository.update(id, data as any);
+        await this.auditService.log('PROFILE_UPDATE', id, 'SUCCESS', {
+            metadata: { action: 'update_preferences', fields: Object.keys(data) }
+        });
+        return result;
     }
 
     async getProfilePreferences(id: string): Promise<{ preferences: any } | null> {

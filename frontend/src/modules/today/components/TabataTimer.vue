@@ -464,7 +464,7 @@ onBeforeUnmount(() => {
 
 .tabata__dial {
   position: relative;
-  width: min(260px, 60vw);
+  width: min(280px, 70vw);
   aspect-ratio: 1;
   margin: 0 auto;
   border-radius: 50%;
@@ -486,8 +486,9 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 0.6rem;
   padding: 1.2rem;
-  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.16);
   text-align: center;
+  border: 1px solid var(--color-border);
 }
 
 .tabata__exercise {
@@ -496,12 +497,13 @@ onBeforeUnmount(() => {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: clamp(0.85rem, 2.4vw, 1rem);
-  color: var(--color-text-secondary);
+  font-size: clamp(1rem, 3.5vw, 1.2rem);
+  color: var(--color-text-primary);
+  font-weight: 500;
 }
 
 .tabata__timer {
-  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  font-size: clamp(3rem, 12vw, 4.5rem);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
@@ -578,15 +580,15 @@ onBeforeUnmount(() => {
 .tabata__fieldset input {
   border-radius: var(--radius-md);
   border: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
-  padding: 0.4rem 0.6rem;
-  font-size: clamp(0.8rem, 2vw, 0.9rem);
+  padding: 0.6rem 0.8rem;
+  font-size: clamp(0.9rem, 2.5vw, 1rem);
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
 }
 
 @media (max-width: 640px) {
   .tabata__dial {
-    width: min(220px, 80vw);
+    width: min(280px, 80vw);
   }
 
   .tabata__fieldset {

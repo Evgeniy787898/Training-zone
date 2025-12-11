@@ -252,6 +252,32 @@ export class SessionRepository {
         });
     }
 
+    async fetchHistory(profileId: string, limit: number, offset: number) {
+        if (this.plannedAtColumnAvailable) {
+            try {
+                return await this.prisma.trainingSession.findMany({
+                    where: { profileId, status: 'done' },
+                    orderBy: { plannedAt: 'desc' },
+                    take: limit,
+                    skip: offset,
+                });
+            } catch (error) {
+                if (this.isMissingColumnError(error, 'planned_at')) {
+                    this.markPlannedAtUnavailable(error);
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+        return this.prisma.trainingSession.findMany({
+            where: { profileId, status: 'done' },
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            skip: offset,
+        });
+    }
+
     async findSessionByPlannedTimestamp(profileId: string, plannedAt: Date) {
         if (this.plannedAtColumnAvailable) {
             try {

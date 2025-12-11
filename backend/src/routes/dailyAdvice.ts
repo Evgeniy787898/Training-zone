@@ -12,6 +12,7 @@ import { rememberCachedResource } from '../modules/infrastructure/cacheStrategy.
 import { cacheConfig } from '../config/constants.js';
 import { applyEdgeCacheHeaders } from '../utils/cacheHeaders.js';
 import { maybeRespondWithNotModified } from '../utils/etag.js';
+import { microserviceClients } from '../config/constants.js';
 import type { DailyAdviceResponse } from '../types/apiResponses.js';
 
 const router = Router();
@@ -92,6 +93,16 @@ router.get('/', validateRequest({ query: dailyAdviceQuerySchema }), async (req: 
                         lte: dateEnd,
                     },
                 },
+                include: {
+                    exercises: {
+                        select: {
+                            exerciseKey: true,
+                            levelCode: true,
+                            exerciseLevelId: true,
+                        },
+                        take: 5
+                    }
+                }
             });
             adviceType = session ? 'training' : 'rest';
         } catch (dbError: any) {
@@ -99,6 +110,59 @@ router.get('/', validateRequest({ query: dailyAdviceQuerySchema }), async (req: 
             return respondWithDatabaseUnavailable(res, 'daily_advice', {
                 traceId: req.traceId,
                 details: { stage: 'training_session_lookup' },
+            });
+        }
+
+        let aiAdvicePayload: DailyAdviceResponse | null = null;
+
+        // Try AI Advisor if it's a training day and service is enabled
+        if (adviceType === 'training' && session && session.exercises.length > 0 && microserviceClients.aiAdvisor.enabled) {
+            try {
+                const { request } = await import('undici');
+                // Pick a random exercise from the session to focus on
+                const randomExercise = session.exercises[Math.floor(Math.random() * session.exercises.length)];
+
+                const aiUrl = `${microserviceClients.aiAdvisor.baseUrl}/api/generate-advice`;
+                console.log(`[daily-advice] Calling AI Advisor for exercise ${randomExercise.exerciseKey}`);
+
+                const aiRes = await request(aiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'content-type': 'application/json',
+                        'x-trace-id': req.traceId || '',
+                    },
+                    body: JSON.stringify({
+                        exerciseKey: randomExercise.exerciseKey,
+                        currentLevel: randomExercise.levelCode || '1.1', // Fallback level if missing
+                        performance: {}, // Can include history later
+                        goals: [], // Can fetch from profile later
+                        context: []
+                    })
+                });
+
+                if (aiRes.statusCode === 200) {
+                    const aiData = await aiRes.body.json() as any;
+                    aiAdvicePayload = {
+                        type: 'training',
+                        shortText: aiData.advice.split('.')[0] + '.', // Simple heuristic for short text
+                        fullText: aiData.advice,
+                        ideas: normalizeAdviceIdeas(aiData.tips),
+                        icon: 'run', // Dynamic icon based on advice?
+                        theme: 'progress'
+                    };
+                } else {
+                    console.warn(`[daily-advice] AI Advisor returned ${aiRes.statusCode}`);
+                }
+            } catch (aiError) {
+                console.error('[daily-advice] Failed to call AI Advisor:', aiError);
+                // Fallback to DB below
+            }
+        }
+
+        if (aiAdvicePayload) {
+            applyEdgeCacheHeaders(res, DAILY_ADVICE_HTTP_CACHE);
+            return respondWithSuccess<DailyAdviceResponse>(res, aiAdvicePayload, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
             });
         }
 

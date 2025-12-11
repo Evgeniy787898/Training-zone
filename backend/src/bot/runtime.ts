@@ -1,21 +1,35 @@
-import { Telegraf as OfficialTelegraf, Markup } from 'telegraf';
+
+import { Telegraf, Context } from 'telegraf';
 import type { SafePrismaClient } from '../types/prisma.js';
 import { DatabaseService } from '../modules/integrations/supabase.js';
 import { config } from '../config/env.js';
+import { logger } from '../services/logger.js';
+import { microserviceClients } from '../config/constants.js';
+
 import {
     authMiddleware,
-    dialogStateMiddleware,
     loggingMiddleware,
     errorMiddleware,
+    dialogStateMiddleware,
 } from './middleware/auth.js';
-import { startInactivityMonitor } from './services/inactivityMonitor.js';
-import { Telegraf as LegacyTransport } from './telegrafBridge.js';
 
-type BotController = {
-    stop: () => Promise<void>;
-};
+import { startCommand } from './commands/start.js';
+import { helpCommand } from './commands/help.js';
+import { todayCommand } from './commands/today.js';
+import { settingsCommand } from './commands/settings.js';
+import { statsCommand } from './commands/stats.js';
+import { statusCommand } from './commands/status.js';
 
-let controller: BotController | null = null;
+import {
+    createNavigationHandlers,
+    createMessageHandler,
+} from './handlers/index.js';
+
+import { saveWorkoutCompletion } from './services/workoutService.js';
+import { NotificationService } from '../services/notificationService.js';
+
+let bot: Telegraf<Context> | null = null;
+let controller: { stop: () => Promise<void> } | null = null;
 
 const resolveWebAppUrl = () => {
     if (config.app.webAppUrl) {
@@ -30,130 +44,109 @@ const resolveWebAppUrl = () => {
 };
 
 export async function startTelegramBot(prisma: SafePrismaClient | null): Promise<void> {
-    if (!process.env.TELEGRAM_BOT_TOKEN) {
-        console.warn('[bot] TELEGRAM_BOT_TOKEN is not configured. Telegram bot will not be started.');
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+        logger.warn('[bot] ⚠️ TELEGRAM_BOT_TOKEN is not configured. Bot will not start.');
+        logger.warn('[bot] 👉 Add TELEGRAM_BOT_TOKEN to your .env file to enable the bot.');
         return;
     }
 
+    // Log token status (masked for security)
+    const maskedToken = token.length > 10 ? `${token.slice(0, 5)}...${token.slice(-5)}` : '***';
+    logger.info(`[bot] Token configured: ${maskedToken}`);
+
     if (!prisma) {
-        console.warn('[bot] Prisma client is not available. Telegram bot will not be started.');
+        logger.warn('[bot] ⚠️ Prisma client is not available. Bot will not start.');
         return;
     }
 
     if (controller) {
+        logger.info('[bot] Bot is already running.');
         return;
     }
 
-    const botToken = process.env.TELEGRAM_BOT_TOKEN.trim();
-    const telegraf = new OfficialTelegraf(botToken, {
-        handlerTimeout: Number(process.env.TELEGRAM_BOT_HANDLER_TIMEOUT_MS ?? '45000'),
-    });
+    logger.info('[bot] 🚀 Initializing Telegram Bot (v7.0 Modular)...');
 
     const db = new DatabaseService(prisma);
-    const allowedUserIds = config.telegram.allowedUserIds;
-    const webAppUrl = resolveWebAppUrl();
+    const webAppUrl = resolveWebAppUrl() || undefined;
+    const aiAdvisorUrl = microserviceClients.aiAdvisor.baseUrl || 'http://localhost:3003';
 
-    telegraf.use(async (ctx, next) => authMiddleware(ctx as any, db, allowedUserIds, next));
-    telegraf.use(async (ctx, next) => dialogStateMiddleware(ctx as any, db, next));
-    telegraf.use(async (ctx, next) => loggingMiddleware(ctx as any, db, next));
-    telegraf.catch((err, ctx) => {
-        console.error('[bot] handler error:', err);
-        return errorMiddleware(ctx as any, db);
-    });
-
-    const sendWelcome = async (ctx: any) => {
-        const text =
-            'Привет! Я тренировочный ассистент TZONA.\n\n' +
-            'Открой мини‑приложение, чтобы посмотреть план и статистику, или воспользуйся командами:\n' +
-            '• /menu — открыть главное меню\n' +
-            '• /help — подсказка по функциям\n';
-
-        const replyMarkup = webAppUrl
-            ? Markup.inlineKeyboard([[Markup.button.webApp('Открыть TZONA', webAppUrl)]])
-            : undefined;
-
-        await ctx.reply(text, replyMarkup);
-    };
-
-    telegraf.start(sendWelcome);
-    telegraf.command('menu', sendWelcome);
-    telegraf.command('help', async (ctx) => {
-        await ctx.reply(
-            'Доступные команды:\n' +
-            '• /menu — открыть главное меню\n' +
-            '• /help — показать подсказку\n' +
-            '• /plan — показать ближайшую тренировку\n' +
-            '• /week — прогресс за неделю\n' +
-            '• /report — отчёт за период\n' +
-            '\n' +
-            'Основной функционал доступен в мини‑приложении Telegram.',
-        );
-    });
-
-    telegraf.command('plan', async (ctx) => {
-        const profileId = (ctx as any).state?.profileId;
-        if (!profileId) {
-            await ctx.reply('Не удалось определить профиль. Введите /start и попробуйте снова.');
-            return;
-        }
-        const latest = await db.getLatestSessionSummary(profileId);
-        if (!latest) {
-            await ctx.reply('У тебя пока нет запланированных тренировок. Загляни в приложение и создай первую!');
-            return;
-        }
-
-        const statusMap: Record<string, string> = {
-            planned: 'запланирована',
-            in_progress: 'в процессе',
-            done: 'завершена',
-            skipped: 'пропущена',
-        };
-        await ctx.reply(
-            `Следующая тренировка ${new Date(latest.plannedAt).toLocaleString('ru-RU')} (${statusMap[latest.status] ?? latest.status})`,
-        );
-    });
-
-    telegraf.on('text', async (ctx) => {
-        if (webAppUrl) {
-            await ctx.reply('Открой мини‑приложение TZONA, чтобы продолжить.', Markup.inlineKeyboard([
-                Markup.button.webApp('Открыть TZONA', webAppUrl),
-            ]));
-        } else {
-            await ctx.reply('Скоро здесь появятся дополнительные команды. Пока воспользуйся приложением TZONA.');
-        }
-    });
-
-    try {
-        await telegraf.telegram.deleteWebhook({ drop_pending_updates: true });
-        console.log('[bot] Cleared existing Telegram webhook (using long polling).');
-    } catch (error) {
-        console.warn('[bot] Failed to delete existing webhook (continuing with polling):', error);
+    // Log Web App URL status
+    if (webAppUrl) {
+        logger.info(`[bot] ✅ Web App URL configured: ${webAppUrl}`);
+    } else {
+        logger.warn('[bot] ⚠️ Web App URL not configured. "Open TZONA" button will be hidden.');
     }
 
-    await telegraf.launch();
-    console.log('[bot] Telegram bot started successfully (long polling).');
+    // Initialize Telegraf
+    bot = new Telegraf<Context>(token);
 
-    let disposeInactivity: (() => void) | null = null;
-    try {
-        const legacyTransport = new LegacyTransport(botToken);
-        disposeInactivity = startInactivityMonitor(legacyTransport as any, db);
-    } catch (error) {
-        console.warn('[bot] Failed to start inactivity monitor:', error);
-    }
+    // Middleware
+    bot.use((ctx, next) => loggingMiddleware(ctx as any, db, next));
+    bot.use((ctx, next) => errorMiddleware(ctx as any, db, next));
+    bot.use((ctx, next) => authMiddleware(ctx as any, db, undefined, next));
+    bot.use((ctx, next) => dialogStateMiddleware(ctx as any, db, next));
 
+    // Commands
+    bot.command('start', (ctx) => startCommand(ctx as any, { db, webAppUrl }));
+    bot.command('help', (ctx) => helpCommand(ctx as any));
+    bot.command('today', (ctx) => todayCommand(ctx as any, { db, webAppUrl }));
+    bot.command('settings', (ctx) => settingsCommand(ctx as any, { webAppUrl }));
+    bot.command('stats', (ctx) => statsCommand(ctx as any, { db, webAppUrl }));
+    bot.command('status', (ctx) => statusCommand(ctx as any, { db, webAppUrl }));
+
+    // Navigation and Actions
+    const navHandlers = createNavigationHandlers({ db });
+
+    // Wire Navigation Actions
+    bot.action('go_home', navHandlers.goHome);
+    bot.action('sec_training', navHandlers.secTraining);
+    bot.action('sec_games', navHandlers.secGames);
+    bot.action('sec_wellness', navHandlers.secWellness);
+    bot.action('sec_ai', navHandlers.secAi);
+    bot.action('sec_profile', navHandlers.secProfile);
+
+    // Wire Reply Keyboard Actions (Main Menu)
+    bot.hears('📅 Сегодня', (ctx) => todayCommand(ctx as any, { db, webAppUrl }));
+    bot.hears('💪 Тренировка', navHandlers.secTraining);
+    bot.hears('🧠 AI-коуч', navHandlers.secAi);
+    bot.hears('📊 Прогресс', (ctx) => statsCommand(ctx as any, { db, webAppUrl }));
+
+    // Additional button handling to ensure navigation consistency
+    bot.hears('🎯 Игры', navHandlers.secGames);
+    bot.hears('❤️ Wellness', navHandlers.secWellness);
+    bot.hears('👤 Профиль', navHandlers.secProfile);
+
+    // Message Handler (AI, Intents, Context)
+    const messageHandler = await createMessageHandler({
+        db,
+        aiAdvisorUrl,
+        aiApiToken: process.env.AI_ADVISOR_API_TOKEN,
+        webAppUrl,
+        saveWorkoutCompletion: (ctx, db, pid, state) => saveWorkoutCompletion(ctx, db, pid, state)
+    });
+    bot.on('message', messageHandler as any);
+
+    // Initialize Notification Service
+    const notificationService = new NotificationService(bot, prisma as any);
+    notificationService.startScheduler();
+
+    // Launch
+    await bot.launch(() => {
+        logger.info(`[bot] Telegram Bot ${bot?.botInfo?.username} started successfully.`);
+    });
+
+    // Controller for graceful stop
     controller = {
         stop: async () => {
-            try {
-                await telegraf.stop('SIGTERM');
-            } catch (error) {
-                console.error('[bot] Failed to stop telegraf:', error);
+            notificationService.stopScheduler();
+            if (bot) {
+                bot.stop('SIGTERM');
+                bot = null;
+                controller = null;
+                logger.info('[bot] Bot stopped.');
             }
-            if (disposeInactivity) {
-                disposeInactivity();
-            }
-            controller = null;
-            console.log('[bot] Telegram bot stopped.');
-        },
+        }
     };
 }
 
@@ -162,4 +155,3 @@ export async function stopTelegramBot(): Promise<void> {
         await controller.stop();
     }
 }
-

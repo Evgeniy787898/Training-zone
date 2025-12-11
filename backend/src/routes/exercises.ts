@@ -30,8 +30,9 @@ import type {
 } from '../types/apiResponses.js';
 
 import type { ExerciseService } from '../modules/exercises/exercise.service.js';
+import type { FavoritesService } from '../modules/exercises/favorites.service.js';
 
-export function createExercisesRouter(exerciseService: ExerciseService) {
+export function createExercisesRouter(exerciseService: ExerciseService, favoritesService?: FavoritesService) {
     const router = Router();
 
     const EXERCISE_CATALOG_CACHE = cacheConfig.exercises.catalog;
@@ -765,6 +766,203 @@ export function createExercisesRouter(exerciseService: ExerciseService) {
             }
         },
     );
+
+    // ==================== FAVORITES ENDPOINTS ====================
+
+    // GET /api/exercises/favorites - Get all favorite exercise keys
+    router.get('/favorites', async (req: Request, res: Response) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'auth_required',
+                        message: 'Profile required',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            if (!favoritesService) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'service_unavailable',
+                        message: 'Favorites service not configured',
+                        statusCode: 503,
+                        category: 'dependencies',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            const favorites = await favoritesService.getFavorites(req.profileId);
+            return respondWithSuccess(res, { items: favorites }, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error: any) {
+            console.error('[exercises/favorites] Error:', error);
+            return respondWithAppError(
+                res,
+                new AppError({
+                    code: 'favorites_error',
+                    message: 'Failed to get favorites',
+                    statusCode: 500,
+                    category: 'internal',
+                }),
+                { traceId: req.traceId },
+            );
+        }
+    });
+
+    // POST /api/exercises/favorites/:exerciseKey - Add to favorites
+    router.post('/favorites/:exerciseKey', async (req: Request, res: Response) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'auth_required',
+                        message: 'Profile required',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            if (!favoritesService) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'service_unavailable',
+                        message: 'Favorites service not configured',
+                        statusCode: 503,
+                        category: 'dependencies',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            const { exerciseKey } = req.params;
+            const result = await favoritesService.addFavorite(req.profileId, exerciseKey);
+            return respondWithSuccess(res, result, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error: any) {
+            console.error('[exercises/favorites] Add error:', error);
+            return respondWithAppError(
+                res,
+                new AppError({
+                    code: 'favorites_error',
+                    message: 'Failed to add favorite',
+                    statusCode: 500,
+                    category: 'internal',
+                }),
+                { traceId: req.traceId },
+            );
+        }
+    });
+
+    // DELETE /api/exercises/favorites/:exerciseKey - Remove from favorites
+    router.delete('/favorites/:exerciseKey', async (req: Request, res: Response) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'auth_required',
+                        message: 'Profile required',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            if (!favoritesService) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'service_unavailable',
+                        message: 'Favorites service not configured',
+                        statusCode: 503,
+                        category: 'dependencies',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            const { exerciseKey } = req.params;
+            const result = await favoritesService.removeFavorite(req.profileId, exerciseKey);
+            return respondWithSuccess(res, result, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error: any) {
+            console.error('[exercises/favorites] Remove error:', error);
+            return respondWithAppError(
+                res,
+                new AppError({
+                    code: 'favorites_error',
+                    message: 'Failed to remove favorite',
+                    statusCode: 500,
+                    category: 'internal',
+                }),
+                { traceId: req.traceId },
+            );
+        }
+    });
+
+    // POST /api/exercises/favorites/:exerciseKey/toggle - Toggle favorite
+    router.post('/favorites/:exerciseKey/toggle', async (req: Request, res: Response) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'auth_required',
+                        message: 'Profile required',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            if (!favoritesService) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'service_unavailable',
+                        message: 'Favorites service not configured',
+                        statusCode: 503,
+                        category: 'dependencies',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            const { exerciseKey } = req.params;
+            const result = await favoritesService.toggleFavorite(req.profileId, exerciseKey);
+            return respondWithSuccess(res, result, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error: any) {
+            console.error('[exercises/favorites] Toggle error:', error);
+            return respondWithAppError(
+                res,
+                new AppError({
+                    code: 'favorites_error',
+                    message: 'Failed to toggle favorite',
+                    statusCode: 500,
+                    category: 'internal',
+                }),
+                { traceId: req.traceId },
+            );
+        }
+    });
 
     return router;
 }

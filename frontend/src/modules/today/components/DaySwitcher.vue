@@ -1,52 +1,54 @@
 <template>
-  <div class="day-switcher surface-card surface-card--overlay" role="group" aria-label="Выбор дня тренировки">
-    <button
-      type="button"
-      class="day-switcher__control"
-      @click="handleShift(-1)"
-      aria-label="Предыдущий день"
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path d="M14.5 5.5 9 12l5.5 6.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </button>
-
-    <button
-      type="button"
-      class="day-switcher__current"
-      @click="openCalendar"
-      @keydown.enter.prevent="openCalendar"
-      @keydown.space.prevent="openCalendar"
-    >
-      <span class="day-switcher__weekday">{{ weekdayLabel }}</span>
-      <span class="day-switcher__day">{{ dayNumber }}</span>
-      <span class="day-switcher__month">{{ monthLabel }}</span>
-      <span class="day-switcher__calendar-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" focusable="false">
-          <rect x="4" y="5" width="16" height="15" rx="3" />
-          <path d="M8 3v4M16 3v4M4 11h16" />
+  <div class="day-switcher-wrapper">
+    <div class="day-switcher surface-card surface-card--overlay" role="group" aria-label="Выбор дня тренировки">
+      <button
+        type="button"
+        class="day-switcher__control"
+        @click="handleShift(-1)"
+        aria-label="Предыдущий день"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M14.5 5.5 9 12l5.5 6.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-      </span>
-    </button>
+      </button>
 
-    <button
-      type="button"
-      class="day-switcher__control"
-      @click="handleShift(1)"
-      aria-label="Следующий день"
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path d="M9.5 5.5 15 12l-5.5 6.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </button>
+      <button
+        type="button"
+        class="day-switcher__current"
+        @click="openCalendar"
+        @keydown.enter.prevent="openCalendar"
+        @keydown.space.prevent="openCalendar"
+      >
+        <span class="day-switcher__weekday">{{ weekdayLabel }}</span>
+        <span class="day-switcher__day">{{ dayNumber }}</span>
+        <span class="day-switcher__month">{{ monthLabel }}</span>
+        <span class="day-switcher__calendar-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <rect x="4" y="5" width="16" height="15" rx="3" />
+            <path d="M8 3v4M16 3v4M4 11h16" />
+          </svg>
+        </span>
+      </button>
+
+      <button
+        type="button"
+        class="day-switcher__control"
+        @click="handleShift(1)"
+        aria-label="Следующий день"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M9.5 5.5 15 12l-5.5 6.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
+
+    <CustomCalendar
+      :is-open="isCalendarOpen"
+      :value="date"
+      @update:value="handleDateSelect"
+      @close="isCalendarOpen = false"
+    />
   </div>
-
-  <CustomCalendar
-    :is-open="isCalendarOpen"
-    :value="date"
-    @update:value="handleDateSelect"
-    @close="isCalendarOpen = false"
-  />
 </template>
 
 <script setup lang="ts">
@@ -54,6 +56,10 @@ import { ref, computed } from 'vue';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import CustomCalendar from '@/modules/shared/components/CustomCalendar.vue';
+
+defineOptions({
+  name: 'DaySwitcher',
+});
 
 const props = defineProps<{
   date: Date;

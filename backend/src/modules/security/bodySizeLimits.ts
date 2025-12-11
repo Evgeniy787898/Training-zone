@@ -63,6 +63,7 @@ const parsedLimits = {
     form: parseSizeLimit(process.env.REQUEST_BODY_FORM_LIMIT, bodySizeDefaults.formBytes),
     text: parseSizeLimit(process.env.REQUEST_BODY_TEXT_LIMIT, bodySizeDefaults.textBytes),
     binary: parseSizeLimit(process.env.REQUEST_BODY_BINARY_LIMIT, bodySizeDefaults.binaryBytes),
+    multipart: parseSizeLimit(process.env.REQUEST_BODY_MULTIPART_LIMIT, bodySizeDefaults.multipartBytes),
 };
 
 const fallbackDefault = Math.max(parsedLimits.json, parsedLimits.form, parsedLimits.text, parsedLimits.binary);
@@ -78,6 +79,9 @@ export const resolveBodyLimitForContentType = (contentType?: string | null) => {
         return bodySizeLimits.default;
     }
     const lower = contentType.toLowerCase();
+    if (lower.includes('multipart/form-data')) {
+        return bodySizeLimits.multipart;
+    }
     if (lower.includes('application/json')) {
         return bodySizeLimits.json;
     }

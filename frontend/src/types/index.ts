@@ -105,6 +105,7 @@ export interface AssistantSessionState {
 
 export interface AssistantReplyResponse {
     reply: string | null;
+    message?: string; // Fallback for reply
     intent?: string;
     confidence?: number;
     candidates?: string[];
@@ -148,6 +149,8 @@ export interface ExerciseCatalogItem {
         video?: string;
         image?: string;
     };
+    muscleGroup?: string;
+    isFavorite?: boolean;
     latest_progress?: {
         level?: string;
         session_date?: string;
@@ -264,6 +267,7 @@ export interface ProgramExercise {
     programId?: string | null;
     iconUrl?: string | null;
     iconUrlHover?: string | null;
+    equipment?: string[];
     createdAt?: string;
     updatedAt?: string;
     [key: string]: any;

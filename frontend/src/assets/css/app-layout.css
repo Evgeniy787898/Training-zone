@@ -1,0 +1,623 @@
+/**
+ * App Layout Styles
+ * Extracted from App.vue for better maintainability
+ * Contains: header panel styles, hero styles, footer, transitions
+ */
+
+/* ==========================================
+   Header Content Panel - HeroPanel container
+   ========================================== */
+
+.header-content-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 99;
+    height: 0;
+    overflow: hidden;
+    background-color: var(--panel-surface-base, var(--color-bg-elevated));
+    background-image: var(--panel-surface-gradient, var(--gradient-accent));
+    box-shadow: var(--shadow-dark-xl);
+    -webkit-overflow-scrolling: touch;
+    will-change: height;
+    backface-visibility: hidden;
+    transform: translateZ(0);
+}
+
+.header-content-panel--expanded {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+
+.header-content-panel--expanded::-webkit-scrollbar {
+    width: 6px;
+}
+
+.header-content-panel--expanded::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.45);
+    border-radius: 999px;
+    transition: background-color 0.2s ease;
+}
+
+.header-content-panel--expanded:hover::-webkit-scrollbar-thumb,
+.header-content-panel--expanded:focus-visible::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.6);
+}
+
+.header-content-panel--expanded::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ==========================================
+   Header Action Button (Date/Status)
+   ========================================== */
+
+.header-action-btn {
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: transform var(--transition-fast),
+        box-shadow var(--transition-fast),
+        border-color var(--transition-fast),
+        background var(--transition-fast),
+        color var(--transition-fast);
+    -webkit-tap-highlight-color: transparent;
+    backdrop-filter: saturate(160%) blur(18px);
+    box-shadow: var(--shadow-md);
+}
+
+.header-action-btn--status {
+    width: auto;
+    min-width: 52px;
+    height: 44px;
+    padding: 0 12px;
+    border-radius: 14px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    font-weight: 600;
+    position: relative;
+    overflow: hidden;
+}
+
+.header-action-btn__date {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-action-btn__day {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+}
+
+.header-action-btn__month {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-secondary);
+}
+
+.header-action-btn__hover-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-action-btn--status:hover .header-action-btn__date,
+.header-action-btn--status:focus-visible .header-action-btn__date {
+    opacity: 0;
+    transform: scale(0.8);
+}
+
+.header-action-btn--status:hover .header-action-btn__hover-text,
+.header-action-btn--status:focus-visible .header-action-btn__hover-text {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* Training day - GO with green glow */
+.header-action-btn--status.header-action-btn--active {
+    background: var(--gradient-accent);
+    border-color: transparent;
+    box-shadow: 0 4px 16px var(--color-accent-light);
+}
+
+.header-action-btn--status.header-action-btn--active .header-action-btn__hover-text {
+    color: #fff;
+    text-shadow: 0 0 12px rgba(255, 255, 255, 0.5);
+}
+
+/* Rest day - ZZZ with theme colors */
+.header-action-btn--status.header-action-btn--rest:hover {
+    background: var(--color-bg-secondary);
+    border-color: var(--color-accent);
+}
+
+.header-action-btn--status.header-action-btn--rest .header-action-btn__hover-text {
+    color: var(--color-accent);
+}
+
+.header-action-btn--status:hover,
+.header-action-btn--status:focus-visible {
+    border-color: var(--color-accent);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+.header-action-btn--status.header-action-btn--active .header-action-btn__go {
+    text-shadow: 0 0 18px rgba(255, 255, 255, 0.7);
+}
+
+.header-action-btn__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.header-action-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-hover);
+    color: var(--color-text-primary);
+}
+
+.header-action-btn:active {
+    transform: translateY(0) scale(0.96);
+    box-shadow: var(--shadow-md);
+}
+
+/* ==========================================
+   Hero Banner (in HeroPanel)
+   ========================================== */
+
+.hero-banner {
+    position: relative;
+    height: 160px;
+    background-size: cover;
+    background-position: center;
+    background-color: var(--color-bg-secondary);
+}
+
+.hero-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.6) 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 1.5rem;
+}
+
+.hero-greeting {
+    font-size: var(--font-size-sm);
+    color: rgba(255, 255, 255, 0.9);
+    margin: 0 0 0.5rem;
+}
+
+.hero-title {
+    font-size: var(--font-size-2xl);
+    font-weight: 600;
+    color: var(--color-text-inverse);
+    margin: 0;
+    text-shadow: var(--text-shadow-sm);
+}
+
+.demo-notice {
+    padding: 0.75rem 1rem;
+    text-align: center;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-secondary);
+}
+
+/* ==========================================
+   Header Customizer Container
+   ========================================== */
+
+.header-customizer-container {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 90;
+}
+
+/* ==========================================
+   Responsive Overrides for Header Elements
+   ========================================== */
+
+@media (max-width: 768px) {
+    .header-content {
+        padding: 0 1rem;
+        height: var(--header-height);
+    }
+
+    .header-pull-indicator {
+        height: 10px;
+    }
+
+    .header-pull-indicator__bar {
+        width: clamp(36px, 7vw, 56px);
+        height: 3.5px;
+    }
+
+    .header-pull-indicator--active .header-pull-indicator__bar {
+        width: clamp(44px, 9vw, 64px);
+        height: 4px;
+    }
+
+    .header-logo {
+        font-size: clamp(1.25rem, 3.5vw, 1.75rem);
+    }
+
+    .header-action-btn {
+        width: 40px;
+        height: 40px;
+    }
+}
+
+@media (max-width: 480px) {
+    .header-content {
+        padding: 0 0.875rem;
+        height: var(--header-height);
+    }
+
+    .header-pull-indicator {
+        height: 8px;
+    }
+
+    .header-pull-indicator__bar {
+        width: clamp(32px, 6vw, 52px);
+        height: 3px;
+    }
+
+    .header-pull-indicator--active .header-pull-indicator__bar {
+        width: clamp(40px, 8vw, 60px);
+        height: 3.5px;
+    }
+
+    .header-logo {
+        font-size: clamp(1.125rem, 3vw, 1.5rem);
+        letter-spacing: 0.1em;
+    }
+
+    .header-action-btn {
+        width: 40px;
+        height: 40px;
+    }
+}
+
+@media (max-width: 360px) {
+    .header-content {
+        padding: 0 0.75rem;
+        height: var(--header-height);
+    }
+
+    .header-pull-indicator {
+        height: 8px;
+    }
+
+    .header-pull-indicator__bar {
+        width: clamp(28px, 5vw, 48px);
+        height: 3px;
+    }
+
+    .header-pull-indicator--active .header-pull-indicator__bar {
+        width: clamp(36px, 7vw, 56px);
+        height: 3.5px;
+    }
+
+    .header-logo {
+        font-size: clamp(1rem, 2.5vw, 1.375rem);
+        letter-spacing: 0.08em;
+    }
+
+    .header-action-btn {
+        width: 32px;
+        height: 32px;
+    }
+}
+
+/* ==========================================
+   App Container Grid Layout
+   ========================================== */
+
+.app-container--grid {
+    display: grid;
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+        'header header'
+        'panel main'
+        'footer footer';
+    gap: clamp(1rem, 3vw, 2.5rem);
+    padding: clamp(0.75rem, 2vw, 1.5rem) clamp(1rem, 4vw, 3rem);
+    max-width: 1500px;
+    margin: 0 auto;
+}
+
+.app-container--grid .app-header {
+    grid-area: header;
+    position: sticky;
+    top: 0;
+    left: auto;
+    right: auto;
+    margin: 0;
+    border-radius: clamp(18px, 3vw, 28px);
+}
+
+.app-container--grid .header-pull-indicator {
+    display: none;
+}
+
+.app-container--grid .header-content-panel {
+    grid-area: panel;
+    position: static;
+    width: 100%;
+    height: 100% !important;
+    max-height: calc(100vh - 4rem);
+    transform: none !important;
+    background: var(--color-surface);
+    border-radius: clamp(18px, 3vw, 28px);
+    border: 1px solid var(--color-border);
+    overflow-y: auto;
+    box-shadow: none;
+}
+
+.app-container--grid .header-content-panel--expanded {
+    overflow-y: auto;
+}
+
+.app-container--grid .app-main {
+    grid-area: main;
+    padding-top: clamp(1rem, 2vw, 2.25rem);
+    padding-bottom: clamp(var(--footer-height), 10vh, var(--footer-height) + 2rem);
+}
+
+.app-container--grid .app-footer {
+    grid-area: footer;
+    position: sticky;
+    bottom: 0;
+    left: auto;
+    right: auto;
+    border-radius: clamp(18px, 3vw, 28px);
+}
+
+/* ==========================================
+   App Footer - Sticky Navigation
+   ========================================== */
+
+.app-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    min-height: var(--footer-height);
+    background: var(--color-bg-elevated);
+    border-top: 1px solid var(--color-border);
+    padding: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
+    backface-visibility: hidden;
+    box-shadow: 0 -16px 32px rgba(15, 23, 42, 0.12);
+    backdrop-filter: saturate(160%) blur(14px);
+    transform: translateZ(0);
+    display: flex;
+    align-items: flex-start;
+    box-sizing: border-box;
+}
+
+/* ==========================================
+   Toast Container
+   ========================================== */
+
+.toast-container {
+    position: fixed;
+    top: calc(var(--header-height) + 1rem);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: calc(100% - 2rem);
+    max-width: var(--max-width-content);
+    pointer-events: none;
+}
+
+/* ==========================================
+   Route Error Fallback
+   ========================================== */
+
+.route-error {
+    display: grid;
+    gap: 8px;
+    padding: 24px 20px;
+    background: color-mix(in srgb, var(--color-surface) 90%, var(--color-accent) 4%);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+    border-radius: 12px;
+    color: var(--color-text);
+}
+
+.route-error__title {
+    margin: 0;
+    font-weight: 700;
+    font-size: 1rem;
+}
+
+.route-error__hint {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--color-text-secondary);
+}
+
+.route-error__actions {
+    display: flex;
+    gap: 12px;
+}
+
+.route-error__btn {
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    background: var(--color-accent);
+    color: var(--color-on-accent, #0b0c0f);
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.route-error__btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--color-accent) 32%, transparent);
+}
+
+.route-error__btn:active {
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+/* ==========================================
+   App Main Content Area
+   ========================================== */
+
+.app-main {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0;
+    padding-top: var(--header-height);
+    padding-bottom: calc(var(--footer-height) + env(safe-area-inset-bottom) + 16px);
+    background: transparent;
+    transition: padding 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    scrollbar-gutter: stable both-edges;
+}
+
+.app-main--fullscreen {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+.app-main--locked {
+    overflow: hidden;
+    height: 100vh;
+    height: 100dvh;
+}
+
+.app-main:hover,
+.app-main:focus-visible,
+.app-main:active {
+    scrollbar-width: thin;
+}
+
+.app-main::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    opacity: 0;
+    background: transparent;
+    transition: width 0.2s ease-in-out, opacity 0.2s ease-in-out;
+}
+
+.app-main::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: var(--radius-full);
+    transition: background-color 0.2s ease-in-out;
+}
+
+.app-main:hover::-webkit-scrollbar,
+.app-main:focus-visible::-webkit-scrollbar,
+.app-main:active::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+    opacity: 1;
+}
+
+.app-main:hover::-webkit-scrollbar-thumb,
+.app-main:focus-visible::-webkit-scrollbar-thumb,
+.app-main:active::-webkit-scrollbar-thumb {
+    background-color: var(--scroll-thumb-color-hover, rgba(32, 33, 35, 0.45));
+}
+
+/* ==========================================
+   Page Transitions
+   ========================================== */
+
+/* Header slide transition */
+.header-slide-enter-active {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-slide-leave-active {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-slide-enter-from {
+    opacity: 0;
+    transform: translateY(-20px);
+}
+
+.header-slide-leave-to {
+    opacity: 0;
+    transform: translateY(-10px);
+}
+
+.header-slide-enter-to,
+.header-slide-leave-from {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Footer slide transition */
+.footer-slide-enter-active,
+.footer-slide-leave-active {
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+}
+
+.footer-slide-enter-from,
+.footer-slide-leave-to {
+    transform: translateY(100%);
+    opacity: 0;
+}
+
+/* Fade slide transition (for route changes) */
+.fade-slide-enter-active {
+    transition: all 0.3s ease-out;
+}
+
+.fade-slide-leave-active {
+    transition: all 0.2s ease-in;
+}
+
+.fade-slide-enter-from {
+    opacity: 0;
+    transform: translateY(10px);
+}
+
+.fade-slide-leave-to {
+    opacity: 0;
+    transform: translateY(-10px);
+}

@@ -13,7 +13,7 @@ import type {
 } from '@/types';
 
 export type ThemeMode = 'dark';
-export type ThemePresetId = 'nocturne';
+export type ThemePresetId = 'nocturne' | 'aurora';
 
 export type ThemePreset = {
     id: ThemePresetId;
@@ -77,6 +77,52 @@ const themePresets: ThemePreset[] = [
                 'radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.22), transparent 55%), radial-gradient(circle at 80% 0%, rgba(56, 189, 248, 0.18), transparent 45%), linear-gradient(180deg, rgba(2, 6, 23, 0.85) 0%, rgba(2, 6, 23, 0.6) 100%)',
             '--panel-surface-gradient': 'linear-gradient(150deg, rgba(15, 17, 23, 0.94) 0%, rgba(9, 11, 18, 0.96) 100%)',
             '--panel-surface-base': 'rgba(9, 11, 18, 0.94)',
+        },
+    },
+    {
+        id: 'aurora',
+        label: 'Aurora Light',
+        mode: 'light',
+        cssVars: {
+            '--color-bg': '#ffffff',
+            '--color-bg-secondary': '#f8fafc',
+            '--color-bg-elevated': '#f1f5f9',
+            '--color-surface': 'rgba(255, 255, 255, 0.8)',
+            '--color-surface-hover': 'rgba(241, 245, 249, 0.9)',
+            '--color-surface-tint': 'rgba(236, 253, 245, 0.5)',
+            '--color-surface-strong': '#e2e8f0',
+            '--color-surface-glass': 'rgba(255, 255, 255, 0.9)',
+            '--color-border': '#e2e8f0',
+            '--color-border-strong': '#cbd5e1',
+            '--color-border-subtle': '#f1f5f9',
+            '--color-text-primary': '#0f172a',
+            '--color-text-secondary': '#475569',
+            '--color-text-muted': '#94a3b8',
+            '--color-text-inverse': '#f8fafc',
+            '--color-accent': '#10a37f',
+            '--color-accent-hover': '#059669',
+            '--color-accent-contrast': '#ffffff',
+            '--color-accent-light': 'rgba(16, 163, 127, 0.1)',
+            '--color-success': '#10a37f',
+            '--color-success-soft': 'rgba(16, 163, 127, 0.15)',
+            '--color-warning': '#f59e0b',
+            '--color-warning-soft': 'rgba(245, 158, 11, 0.15)',
+            '--color-danger': '#ef4444',
+            '--color-danger-soft': 'rgba(239, 68, 68, 0.15)',
+            '--color-info': '#3b82f6',
+            '--gradient-accent': 'linear-gradient(135deg, rgba(16, 163, 127, 0.2) 0%, rgba(5, 150, 105, 0.1) 100%)',
+            '--gradient-accent-strong': 'linear-gradient(135deg, #10a37f 0%, #059669 100%)',
+            '--gradient-info-strong': 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+            '--gradient-surface': 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+            '--shadow-xs': '0 1px 2px rgba(15, 23, 42, 0.05)',
+            '--shadow-sm': '0 4px 6px -1px rgba(15, 23, 42, 0.1)',
+            '--shadow-md': '0 10px 15px -3px rgba(15, 23, 42, 0.1)',
+            '--shadow-lg': '0 20px 25px -5px rgba(15, 23, 42, 0.1)',
+            '--shadow-xl': '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
+            '--scroll-thumb-color-hover': '#94a3b8',
+            '--app-background-gradient': 'linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%)',
+            '--panel-surface-gradient': 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+            '--panel-surface-base': '#ffffff',
         },
     },
 ];
@@ -156,6 +202,11 @@ export const useAppStore = defineStore('app', () => {
     const openAdviceModalFn = ref<(() => void) | null>(null);
     let toastTimer: ReturnType<typeof setTimeout> | null = null;
     const appliedCssVariables = new Map<string, string>();
+    const isFocusMode = ref(false);
+
+    const toggleFocusMode = () => {
+        isFocusMode.value = !isFocusMode.value;
+    };
 
     // Shared program context state
     const userProgram = ref<UserProgramSnapshot | null>(null);
@@ -190,6 +241,14 @@ export const useAppStore = defineStore('app', () => {
             }
             toastTimer = null;
         }, 5000);
+    };
+
+    const clearToast = () => {
+        if (toastTimer !== null) {
+            clearTimeout(toastTimer);
+            toastTimer = null;
+        }
+        toast.value = null;
     };
 
     const refreshProfile = async () => {
@@ -937,8 +996,15 @@ export const useAppStore = defineStore('app', () => {
 
     const setCustomThemePalette = (palette: CustomThemePalette, { persistLocal = true } = {}) => {
         customThemePalette.value = palette;
+        // When setting a custom palette, we must switch to custom mode
+        themePresetId.value = 'custom';
+
         if (persistLocal) {
             persistCustomThemePalette();
+            // Also save that we are in custom mode
+            if (typeof window !== 'undefined') {
+                window.localStorage.setItem('tzona-ui-theme-id', 'custom');
+            }
         }
         applyThemePresetToDocument();
     };
@@ -988,11 +1054,38 @@ export const useAppStore = defineStore('app', () => {
     };
 
     const initializeTheme = () => {
+        if (typeof window === 'undefined') return;
+
+        // Try to load saved preset ID
+        const savedPresetId = window.localStorage.getItem('tzona-ui-theme-id');
+
+        if (savedPresetId === 'custom') {
+            // Load custom palette
+            try {
+                const savedPalette = window.localStorage.getItem(themeStorageKey);
+                if (savedPalette) {
+                    const parsed = JSON.parse(savedPalette);
+                    // Minimal validation could differ, but assuming valid structure
+                    customThemePalette.value = parsed;
+                    themePresetId.value = 'custom';
+                    applyThemePresetToDocument();
+                    return;
+                }
+            } catch (err) {
+                console.warn('Failed to load custom theme palette', err);
+            }
+        } else if (savedPresetId && themePresets.some(p => p.id === savedPresetId)) {
+            setThemePreset(savedPresetId as ThemePresetId, { persist: false });
+            return;
+        }
+
+        // Default to nocturne if nothing saved
         setThemePreset('nocturne', { persist: false });
     };
 
+    // Initialize theme from localStorage FIRST, then apply to document
     if (typeof document !== 'undefined') {
-        applyThemePresetToDocument();
+        initializeTheme();
     }
 
     return {
@@ -1024,6 +1117,7 @@ export const useAppStore = defineStore('app', () => {
         programDefinition,
         programCurrentLevels,
         showToast,
+        clearToast,
         refreshProfile,
         refreshAssistantSessionState,
         setHeroStatus,
@@ -1041,5 +1135,7 @@ export const useAppStore = defineStore('app', () => {
         syncThemePaletteFromServer,
         ensureAssistantSessionMonitor,
         stopAssistantSessionMonitor,
+        isFocusMode,
+        toggleFocusMode,
     };
 });

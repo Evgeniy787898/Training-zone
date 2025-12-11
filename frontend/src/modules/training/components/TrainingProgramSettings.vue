@@ -285,7 +285,7 @@ import {
   getDisciplineColor,
   generateDisciplineGradient,
   getExerciseColor,
-  getProgramColor,
+  getProgramColor as _getProgramColor,
 } from '@/utils/colorUtils';
 import LoadingState from '@/modules/shared/components/LoadingState.vue';
 import ErrorHandler from '@/services/errorHandler';
@@ -817,7 +817,7 @@ const getDisciplineGradientCached = (disciplineId: string, disciplineName: strin
   return disciplineGradientsCache.get(key)!;
 };
 
-const getDisciplineCardStyle = (discipline: TrainingDiscipline | null) => {
+const getDisciplineCardStyle = (_discipline: TrainingDiscipline | null) => {
   // Always use theme colors for consistency with presets
   return {
     '--program-border-color': 'var(--color-border)',
@@ -833,7 +833,7 @@ const getDisciplineCardStyle = (discipline: TrainingDiscipline | null) => {
   };
 };
 
-const getProgramCardStyle = (program: TrainingProgram | null) => {
+const getProgramCardStyle = (_program: TrainingProgram | null) => {
   // Always use theme colors for consistency with presets
   return {
     '--training-program-bg': 'var(--color-bg)',
@@ -844,32 +844,7 @@ const getProgramCardStyle = (program: TrainingProgram | null) => {
   };
 };
 
-const exerciseCardColors = [
-  '#3B82F6', '#2563EB', '#1D4ED8', '#1E40AF',
-  '#60A5FA', '#3B82F6', '#2563EB', '#1D4ED8',
-  '#06B6D4', '#0891B2', '#0E7490', '#155E75',
-  '#22D3EE', '#06B6D4', '#0891B2', '#0E7490',
-  '#8B5CF6', '#7C3AED', '#6D28D9', '#5B21B6',
-  '#A78BFA', '#8B5CF6', '#7C3AED', '#6D28D9',
-  '#C084FC', '#A78BFA', '#8B5CF6', '#7C3AED',
-  '#818CF8', '#6366F1', '#4F46E5', '#4338CA',
-  '#EC4899', '#DB2777', '#BE185D', '#9F1239',
-  '#F472B6', '#EC4899', '#DB2777', '#BE185D',
-  '#FB7185', '#F472B6', '#EC4899', '#DB2777',
-  '#F97316', '#EA580C', '#C2410C', '#9A3412',
-  '#FB923C', '#F97316', '#EA580C', '#C2410C',
-  '#14B8A6', '#0D9488', '#0F766E', '#115E59',
-  '#5EEAD4', '#14B8A6', '#0D9488', '#0F766E',
-];
-
-const getColorFromString = (str: string): string => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const index = Math.abs(hash) % exerciseCardColors.length;
-  return exerciseCardColors[index];
-};
+// Removed: exerciseCardColors, _getColorFromString, _hexToRgba - unused color utilities
 
 const exerciseCardShadowVariants = [
   { offsetX: 0, offsetY: 18, blur: 32, spread: -14, alpha: 0.18 },
@@ -878,18 +853,6 @@ const exerciseCardShadowVariants = [
   { offsetX: 8, offsetY: 22, blur: 40, spread: -16, alpha: 0.19 },
   { offsetX: -14, offsetY: 20, blur: 36, spread: -15, alpha: 0.18 },
 ];
-
-const hexToRgba = (hex: string, alpha: number): string => {
-  const sanitized = hex.replace('#', '').trim();
-  if (sanitized.length !== 6) {
-    return `rgba(15, 23, 42, ${alpha})`;
-  }
-  const num = parseInt(sanitized, 16);
-  const r = (num >> 16) & 0xff;
-  const g = (num >> 8) & 0xff;
-  const b = num & 0xff;
-  return `rgba(${r}, ${g}, ${b}, ${Math.min(Math.max(alpha, 0), 1)})`;
-};
 
 const getExerciseCardStyle = (exercise: ProgramExercise | null, index: number) => {
   let color: string;
@@ -1652,12 +1615,13 @@ watch(selectedProgram, (program, prev) => {
 }
 
 .step-confirm-btn--add {
-  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
-  box-shadow: 0 8px 20px -4px rgba(16, 185, 129, 0.4);
+  /* DS-001: Use CSS variables instead of hardcoded colors */
+  background: linear-gradient(135deg, var(--color-success, #10B981) 0%, var(--color-success-hover, #059669) 100%);
+  box-shadow: 0 8px 20px -4px var(--color-success-light, rgba(16, 185, 129, 0.4));
 }
 
 .step-confirm-btn--add:hover {
-  box-shadow: 0 12px 28px -6px rgba(16, 185, 129, 0.5);
+  box-shadow: 0 12px 28px -6px var(--color-success-light, rgba(16, 185, 129, 0.5));
 }
 
 @media (max-width: 640px) {

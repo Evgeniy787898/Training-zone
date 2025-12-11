@@ -16,7 +16,7 @@
           <button
             type="button"
             class="toast__close"
-            @click="toast = null"
+            @click="clearToast"
             aria-label="Закрыть уведомление"
           >
             ✕
@@ -33,6 +33,7 @@ import { useAppStore } from '@/stores/app';
 
 const appStore = useAppStore();
 const { toast } = storeToRefs(appStore);
+const { clearToast } = appStore;
 </script>
 
 <style scoped>

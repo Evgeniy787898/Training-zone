@@ -12,7 +12,7 @@
           'nav-tab',
           { 'active': activeTab === tab.id }
         ]"
-        @click="$emit('tab-change', tab.id)"
+        @click="handleTabClick(tab.id)"
         @mouseenter="handlePrefetch(tab.id)"
         @focus="handlePrefetch(tab.id)"
         @touchstart.passive="handlePrefetch(tab.id)"
@@ -43,12 +43,13 @@
 import { prefetchRouteBySlug, type AppRouteSlug } from '@/router';
 import { prefetchPredictedRoute } from '@/features/core/prefetchResources';
 import { useProgressState } from '@/services/progressTracker';
+import { hapticSelection } from '@/utils/hapticFeedback';
 import AppIcon from './AppIcon.vue';
 import type { IconName } from '../icons/registry';
 
 const { isActive: isLoading } = useProgressState();
 
-defineEmits<{
+const emit = defineEmits<{
   'tab-change': [tabId: string];
 }>();
 
@@ -58,7 +59,7 @@ defineProps<{
 }>();
 
 type TabDefinition = {
-  id: 'today' | 'exercises' | 'settings';
+  id: 'today' | 'exercises' | 'evolution' | 'history' | 'settings';
   label: string;
   route: AppRouteSlug;
   icon: IconName;
@@ -78,6 +79,18 @@ const tabs: readonly TabDefinition[] = [
     icon: 'stack'
   },
   {
+    id: 'evolution',
+    label: 'Эволюция',
+    route: 'evolution',
+    icon: 'chart'
+  },
+  {
+    id: 'history',
+    label: 'История',
+    route: 'history',
+    icon: 'clock'
+  },
+  {
     id: 'settings',
     label: 'Настройки',
     route: 'settings',
@@ -90,7 +103,14 @@ type TabId = TabDefinition['id'];
 const tabRouteMap: Record<TabId, AppRouteSlug> = {
   today: 'today',
   exercises: 'exercises',
+  evolution: 'evolution',
+  history: 'history',
   settings: 'settings',
+};
+
+const handleTabClick = (tabId: string) => {
+  hapticSelection();
+  emit('tab-change', tabId);
 };
 
 const handlePrefetch = (tabId: TabId) => {
@@ -181,6 +201,7 @@ const handlePrefetch = (tabId: TabId) => {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 16px;
   position: relative;
+  overflow: hidden; /* For ripple or fill effects */
 }
 
 .nav-tab:hover {
@@ -192,13 +213,25 @@ const handlePrefetch = (tabId: TabId) => {
   transform: scale(0.95);
 }
 
-/* Icon styling - no container, clean and large */
+/* Active State - Pill Background */
+.nav-tab.active {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+/* Icon styling */
 .nav-icon {
-  transition: all 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy transition */
+}
+
+.nav-tab.active .nav-icon {
+  transform: translateY(-2px) scale(1.1);
+  filter: drop-shadow(0 4px 8px color-mix(in srgb, var(--color-accent) 40%, transparent));
 }
 
 .nav-tab.active .nav-icon :deep(svg) {
-  filter: drop-shadow(0 0 6px var(--color-accent-light));
+  /* Ensure SVG inherits or uses specific fills if needed, 
+     but AppIcon handles variant='accent' usually via color prop */
 }
 
 /* Label styling */
@@ -212,6 +245,7 @@ const handlePrefetch = (tabId: TabId) => {
 .nav-tab.active .nav-label {
   font-weight: 600;
   color: var(--color-accent);
+  transform: translateY(-1px);
 }
 
 /* Desktop/Tablet adjustments */

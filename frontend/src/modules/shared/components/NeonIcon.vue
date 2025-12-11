@@ -19,7 +19,7 @@ import { resolveIconComponent, type IconName } from '../icons/registry';
 interface Props {
   name: IconName;
   size?: number | string;
-  variant?: 'lime' | 'emerald' | 'violet' | 'amber' | 'aqua' | 'neutral';
+  variant?: 'lime' | 'emerald' | 'violet' | 'amber' | 'aqua' | 'neutral' | 'accent' | 'muted' | 'rose' | 'success';
   className?: string;
 }
 
@@ -36,6 +36,10 @@ const variantClasses = {
   amber: 'neon-icon--amber',
   aqua: 'neon-icon--aqua',
   neutral: 'neon-icon--neutral',
+  accent: 'neon-icon--accent',
+  muted: 'neon-icon--muted',
+  rose: 'neon-icon--rose',
+  success: 'neon-icon--success',
 };
 
 const iconSize = computed(() => {
@@ -92,5 +96,26 @@ const iconComponent = computed(() => resolveIconComponent(props.name));
 .neon-icon--neutral {
   color: var(--color-text-secondary);
   box-shadow: 0 0 1.2rem rgba(232, 234, 237, 0.18);
+}
+
+.neon-icon--accent {
+  color: var(--color-accent);
+  box-shadow: 0 0 1.4rem var(--color-accent-shadow, rgba(66, 133, 244, 0.4));
+}
+
+.neon-icon--muted {
+  color: var(--color-text-muted);
+  box-shadow: none;
+  background: transparent;
+}
+
+.neon-icon--rose {
+  color: var(--color-danger, #f43f5e);
+  box-shadow: 0 0 1.4rem rgba(244, 63, 94, 0.4);
+}
+
+.neon-icon--success {
+  color: var(--color-success);
+  box-shadow: 0 0 1.4rem rgba(16, 185, 129, 0.4);
 }
 </style>

@@ -43,7 +43,16 @@ export type IconName =
   | 'dumbbell'
   | 'database'
   | 'heart'
-  | 'user';
+  | 'user'
+  | 'maximize'
+  | 'plus'
+  | 'minus'
+  | 'send'
+  | 'palette'
+  | 'check'
+  | 'search'
+  | 'heartFilled'
+  | 'wifiOff';
 
 type IconFactory = () => Component;
 
@@ -278,6 +287,53 @@ const ICONS: Record<IconName, IconFactory> = {
       h('circle', { cx: '12', cy: '8', r: '4' }),
       h('path', { d: 'M5 21v-1a7 7 0 0 1 14 0v1' }),
     ], { strokeWidth: '1.4' }),
+  maximize: () =>
+    strokeIcon([
+      h('path', { d: 'M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3' }),
+    ], { strokeWidth: '1.6' }),
+  plus: () =>
+    strokeIcon([
+      h('path', { d: 'M12 5v14M5 12h14' }),
+    ], { strokeWidth: '2' }),
+  minus: () =>
+    strokeIcon([
+      h('path', { d: 'M5 12h14' }),
+    ], { strokeWidth: '2' }),
+  send: () =>
+    strokeIcon([
+      h('path', { d: 'M22 2L11 13' }),
+      h('path', { d: 'M22 2L15 22l-4-9-9-4 20-7Z' }),
+    ], { strokeWidth: '1.6' }),
+  palette: () =>
+    strokeIcon([
+      h('circle', { cx: '13.5', cy: '6.5', r: '1.5' }),
+      h('circle', { cx: '17.5', cy: '10.5', r: '1.5' }),
+      h('circle', { cx: '8.5', cy: '7.5', r: '1.5' }),
+      h('circle', { cx: '6.5', cy: '12.5', r: '1.5' }),
+      h('path', { d: 'M12 2C6.5 2 2 6.5 2 12a10 10 0 0 0 10 10c1.1 0 2-.9 2-2v-.5c0-.5-.2-1.1-.6-1.4a2.1 2.1 0 0 1 1.6-3.6h3a5 5 0 0 0 5-5c0-4.4-4.5-8-11-7.5Z' }),
+    ], { strokeWidth: '1.4' }),
+  check: () =>
+    strokeIcon([
+      h('path', { d: 'M20 6L9 17l-5-5' }),
+    ], { strokeWidth: '2' }),
+  search: () =>
+    strokeIcon([
+      h('circle', { cx: '11', cy: '11', r: '7' }),
+      h('path', { d: 'M21 21l-4.35-4.35' }),
+    ], { strokeWidth: '1.6' }),
+  heartFilled: () =>
+    h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true', focusable: 'false' }, [
+      h('path', { d: 'M12 21s-6.5-4.35-8.5-8.5C2.5 9 4 6 6.75 6A3.75 3.75 0 0 1 12 8.25 3.75 3.75 0 0 1 17.25 6C20 6 21.5 9 20.5 12.5 18.5 16.65 12 21 12 21Z' }),
+    ]),
+  wifiOff: () =>
+    strokeIcon([
+      h('path', { d: 'M1 1l22 22' }),
+      h('path', { d: 'M16.72 11.06c.34.3.65.63.93.98' }),
+      h('path', { d: 'M5 12.55a10.94 10.94 0 0 1 5.17-2.39' }),
+      h('path', { d: 'M10.71 5.05a16 16 0 0 1 11.06 4.19' }),
+      h('path', { d: 'M1.42 9c.74-.58 1.53-1.1 2.37-1.55' }),
+      h('path', { d: 'M12 20h.01' }),
+    ], { strokeWidth: '1.6' }),
 };
 
 export const iconNames = Object.keys(ICONS) as IconName[];

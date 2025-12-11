@@ -25,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, useAttrs, withDefaults, defineProps, defineEmits, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { computed, ref, useAttrs, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 
 const FALLBACK_DATA_URL =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="4" y="4" width="56" height="56" rx="8" fill="%23f1f5f9"/><path d="M18 38l10-10 8 8 10-12 10 14v6H8v-6l10-10z" fill="%23cbd5e1"/><circle cx="24" cy="24" r="6" fill="%239ca3af"/></svg>';

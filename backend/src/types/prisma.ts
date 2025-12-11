@@ -18,6 +18,7 @@ import type {
     TrainingSession,
     TrainingSessionExercise,
     UserTrainingProgram,
+    WorkoutAuditLog,
 } from '@prisma/client';
 
 export type UnsafePrismaMethod = '$executeRawUnsafe' | '$queryRawUnsafe' | '$executeRaw' | '$queryRaw';
@@ -44,6 +45,7 @@ export type PrismaTrainingDiscipline = TrainingDiscipline;
 export type PrismaExercise = Exercise;
 export type PrismaExerciseLevel = ExerciseLevel;
 export type PrismaUserTrainingProgram = UserTrainingProgram;
+export type PrismaWorkoutAuditLog = WorkoutAuditLog;
 
 export type PrismaModels = {
     profile: PrismaProfile;
@@ -64,6 +66,7 @@ export type PrismaModels = {
     exercise: PrismaExercise;
     exerciseLevel: PrismaExerciseLevel;
     userTrainingProgram: PrismaUserTrainingProgram;
+    workoutAuditLog: PrismaWorkoutAuditLog;
 };
 
 export type PrismaModelName = keyof PrismaModels;

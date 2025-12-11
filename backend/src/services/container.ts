@@ -18,7 +18,7 @@ export class DependencyContainer {
     private readonly registrations = new Map<DependencyToken<any>, FactoryRegistration<any>>();
     private readonly instances = new Map<DependencyToken<any>, any>();
 
-    constructor(private readonly parent?: DependencyContainer | null) {}
+    constructor(private readonly parent?: DependencyContainer | null) { }
 
     registerValue<T>(token: DependencyToken<T>, value: T) {
         this.instances.set(token, value);
@@ -73,6 +73,14 @@ export const diTokens = {
     prisma: createToken<SafePrismaClient>('prisma'),
     sessionRepository: createToken<SessionRepository>('sessionRepository'),
     sessionService: createToken<SessionServiceContract>('sessionService'),
+    serviceRegistry: createToken<ServiceRegistry>('serviceRegistry'),
+    historyService: createToken<HistoryService>('historyService'),
 } as const;
 
+import { serviceRegistry, ServiceRegistry } from './serviceRegistry.js';
+import { historyService, HistoryService } from './historyService.js';
+
 export const appContainer = new DependencyContainer(null);
+
+appContainer.registerValue(diTokens.serviceRegistry, serviceRegistry);
+appContainer.registerValue(diTokens.historyService, historyService);

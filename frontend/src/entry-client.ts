@@ -38,7 +38,7 @@ function ensureCdnHints(): void {
 }
 
 export const bootstrap = async () => {
-    // Initialize theme system ASAP (before Vue app mount)
+    // Initialize basic theme system ASAP (light/dark mode)
     const { useTheme } = await import('@/composables/useTheme');
     const { initializeTheme } = useTheme();
     initializeTheme();
@@ -52,6 +52,12 @@ export const bootstrap = async () => {
 
     const initialState = window.__PINIA_INITIAL_STATE__ ?? {};
     const { app, pinia, router } = createApplication(false, initialState);
+
+    // Initialize app store theme (custom accent colors) BEFORE mounting
+    // This ensures PinScreen gets the correct accent color
+    const { useAppStore } = await import('@/stores/app');
+    const appStore = useAppStore(pinia);
+    appStore.initializeTheme();
 
     initMotionPreferences();
     ensureCdnHints();

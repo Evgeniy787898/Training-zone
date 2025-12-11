@@ -1,6 +1,7 @@
 /**
  * Утилита для haptic feedback через Telegram WebApp SDK
  * Предоставляет тактильную обратную связь при взаимодействии с элементами интерфейса
+ * Поддерживает fallback на navigator.vibrate для мобильных браузеров
  */
 
 /**
@@ -28,6 +29,19 @@ const getHapticFeedback = (): any => {
 };
 
 /**
+ * Fallback via navigator.vibrate
+ */
+const vibrate = (pattern: number | number[]): void => {
+  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+    try {
+      navigator.vibrate(pattern);
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+};
+
+/**
  * Haptic feedback типы для impactOccurred
  */
 export type HapticImpactStyle = 'light' | 'medium' | 'heavy' | 'rigid' | 'soft';
@@ -47,9 +61,10 @@ export const hapticLight = (): void => {
     try {
       haptic.impactOccurred('light');
     } catch (error) {
-      // Тихая ошибка - haptic feedback не критичен
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(10);
   }
 };
 
@@ -65,6 +80,8 @@ export const hapticMedium = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(15);
   }
 };
 
@@ -80,6 +97,8 @@ export const hapticHeavy = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(20);
   }
 };
 
@@ -94,6 +113,8 @@ export const hapticRigid = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(20);
   }
 };
 
@@ -108,6 +129,8 @@ export const hapticSoft = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(10);
   }
 };
 
@@ -122,6 +145,8 @@ export const hapticSuccess = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate([10, 30, 10]); // Short-med-short
   }
 };
 
@@ -136,6 +161,8 @@ export const hapticError = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate([50, 50, 50]); // Triple pulse
   }
 };
 
@@ -150,6 +177,36 @@ export const hapticWarning = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate([30, 30]); // Double pulse
+  }
+};
+
+/**
+ * Celebration vibration for workout completion (UI-V04)
+ * Uses a distinctive pattern: burst → pause → double → pause → triple
+ */
+export const hapticCelebration = (): void => {
+  const haptic = getHapticFeedback();
+  if (haptic?.impactOccurred) {
+    try {
+      // Sequence: heavy → pause → medium x2 → pause → light x3
+      haptic.impactOccurred('heavy');
+      setTimeout(() => {
+        haptic.impactOccurred('medium');
+        haptic.impactOccurred('medium');
+      }, 150);
+      setTimeout(() => {
+        haptic.impactOccurred('light');
+        haptic.impactOccurred('light');
+        haptic.impactOccurred('light');
+      }, 350);
+    } catch (error) {
+      console.debug('Haptic feedback error:', error);
+    }
+  } else {
+    // Fallback: celebratory pattern
+    vibrate([50, 50, 30, 30, 30, 50, 20, 20, 20, 20, 20]);
   }
 };
 
@@ -165,6 +222,8 @@ export const hapticSelection = (): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(5);
   }
 };
 
@@ -179,6 +238,8 @@ export const hapticImpact = (style: HapticImpactStyle = 'light'): void => {
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate(10);
   }
 };
 
@@ -193,6 +254,8 @@ export const hapticNotification = (type: HapticNotificationType = 'success'): vo
     } catch (error) {
       console.debug('Haptic feedback error:', error);
     }
+  } else {
+    vibrate([10, 30, 10]);
   }
 };
 
@@ -200,7 +263,7 @@ export const hapticNotification = (type: HapticNotificationType = 'success'): vo
  * Проверяет, поддерживается ли haptic feedback
  */
 export const isHapticSupported = (): boolean => {
-  return isTelegramWebApp() && !!getHapticFeedback();
+  return (isTelegramWebApp() && !!getHapticFeedback()) || (typeof navigator !== 'undefined' && !!navigator.vibrate);
 };
 
 /**
@@ -215,6 +278,7 @@ export default {
   success: hapticSuccess,
   error: hapticError,
   warning: hapticWarning,
+  celebration: hapticCelebration,
   selection: hapticSelection,
   impact: hapticImpact,
   notification: hapticNotification,

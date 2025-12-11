@@ -8,7 +8,7 @@ import { closeHttpClient, configureHttpClient } from './modules/integrations/htt
 import { validateEnvironment } from './config/env.js';
 import { getConfig } from './config/configService.js';
 import { recordConfigUsage } from './services/configUsage.js';
-import { startTelegramBot, stopTelegramBot } from './bot/runtime.js';
+// import { startTelegramBot, stopTelegramBot } from './bot/runtime.js'; // Moved to separate service
 import { bodySizeLimits, describeBodySize } from './modules/security/bodySizeLimits.js';
 
 // Setup modules
@@ -16,6 +16,8 @@ import { parseEnvironmentConfig } from './setup/envConfig.js';
 import { setupPrisma } from './setup/prismaSetup.js';
 import { setupMiddleware } from './setup/middlewareSetup.js';
 import { setupRoutes } from './setup/routesSetup.js';
+import microservicesProxy from './routes/microservicesProxy.js';
+import discoveryRoutes from './routes/discovery.js';
 import healthRouter from './routes/health.js';
 
 // Direct imports for configuration
@@ -102,15 +104,15 @@ app.listen(PORT, appConfig.host, () => {
   logger.info(`📚 API Docs: http://${appConfig.host}:${PORT}/api`);
 });
 
-// Start Telegram bot
-startTelegramBot(prisma).catch((error) => {
-  logger.error({ err: error }, '[bot] Failed to start Telegram bot');
-});
+// Start Telegram bot - MOVED to separate service (src/bot/index.ts)
+// startTelegramBot(prisma).catch((error) => {
+//   logger.error({ err: error }, '[bot] Failed to start Telegram bot');
+// });
 
 // Graceful shutdown
 async function gracefulShutdown(signal: string) {
   logger.info(`Received ${signal}, shutting down gracefully...`);
-  await stopTelegramBot();
+  // await stopTelegramBot(); // Handled by separate service
   await prisma.$disconnect();
   await closeCache();
   cacheWarmingHandle?.dispose();

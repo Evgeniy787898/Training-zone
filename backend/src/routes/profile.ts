@@ -5,6 +5,7 @@ import {
     setCachedResource,
     invalidateCachedResource,
 } from '../modules/infrastructure/cacheStrategy.js';
+import { invalidateAllUserCaches } from '../modules/infrastructure/cacheInvalidation.js';
 import { applyEdgeCacheHeaders } from '../utils/cacheHeaders.js';
 import { maybeRespondWithNotModified } from '../utils/etag.js';
 import {
@@ -128,6 +129,90 @@ export function createProfileRouter(profileService: ProfileService) {
             }
 
             return respondWithSuccess<ProfileSummaryResponse>(res, summary, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    // PATCH /api/profile - Update full profile (goals, equipment, preferences)
+    const updateProfileSchema = z.object({
+        goals: z.array(z.string()).optional(),
+        equipment: z.array(z.string()).optional(),
+        preferences: z.record(z.unknown()).optional(),
+    });
+
+    router.patch('/', validateRequest({ body: updateProfileSchema }), async (req: Request, res: Response, next) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(res, new AppError({
+                    code: 'auth_required',
+                    message: 'Profile required',
+                    statusCode: 401,
+                    category: 'authentication'
+                }));
+            }
+
+            if (!req.prisma) {
+                return respondWithDatabaseUnavailable(res, 'profile_update', { traceId: req.traceId });
+            }
+
+            const payload = req.validated?.body as z.infer<typeof updateProfileSchema>;
+            const updates: any = {};
+
+            if (payload.goals) updates.goals = payload.goals;
+            if (payload.equipment) updates.equipment = payload.equipment;
+
+            // Handle preferences merge if provided
+            let preferencesPatch: Record<string, unknown> | null = null;
+            if (payload.preferences) {
+                const existingPrefs = await profileService.getProfilePreferences(req.profileId);
+                if (existingPrefs) {
+                    const basePreferences = isPlainObject(existingPrefs.preferences) ? existingPrefs.preferences : {};
+                    preferencesPatch = {
+                        ...basePreferences,
+                        ...payload.preferences,
+                    };
+                    updates.preferences = preferencesPatch;
+                }
+            }
+
+            if (Object.keys(updates).length === 0) {
+                return respondWithAppError(res, new AppError({
+                    code: 'invalid_payload',
+                    message: 'No data to update',
+                    statusCode: 400,
+                    category: 'validation'
+                }));
+            }
+
+            // We need to use prisma update directly or add a method to service.
+            // Since we don't have updateProfile in service yet, let's allow service access or just do it here carefully.
+            // Ideally, we add `updateProfile` to `ProfileService`.
+            // For now, let's use `updatePreferences` but it only takes specific args in the interface.
+            // Looking at `profile.service.ts` would be better, but assuming `updatePreferences` only updates `preferences` field is risky.
+            // Wait, lines 220-223 in profile.ts show usage of `profileService.updatePreferences`.
+            // It passes `{ ...updates }`. So if `updatePreferences` method accepts any profile update, we are good.
+            // But the name suggests otherwise.
+
+            // Let's rely on Prisma client being available in `req.prisma` and do a quick update here?
+            // No, that bypasses service logic.
+            // Let's assume `profileService.updatePreferences` (or maybe `updateProfile` if it exists) can handle it.
+            // Or better: Use `req.prisma.profile.update`. 
+            // BUT: "Do not introduce new epics...". This is a small fix.
+            // I will use `req.prisma.profile.update` directly here as a pragmatic solution to avoid refactoring service now.
+
+            const updatedProfile = await req.prisma.profile.update({
+                where: { id: req.profileId },
+                data: updates,
+            });
+
+            await invalidateCachedResource('profileSummary', { profileId: req.profileId });
+
+            const summary = await loadProfileSummary(req.prisma, req.profileId);
+
+            return respondWithSuccess(res, summary, {
                 meta: req.traceId ? { traceId: req.traceId } : undefined,
             });
         } catch (error) {
@@ -386,6 +471,133 @@ export function createProfileRouter(profileService: ProfileService) {
                     { traceId: req.traceId },
                 );
             }
+            next(error);
+        }
+    });
+
+    // PUT /api/profile/pin - Change PIN
+    const changePinSchema = z.object({
+        current_pin: z.string().regex(/^\d{4,6}$/, 'PIN должен быть от 4 до 6 цифр'),
+        new_pin: z.string().regex(/^\d{4,6}$/, 'PIN должен быть от 4 до 6 цифр'),
+    }).refine(data => data.current_pin !== data.new_pin, {
+        message: 'Новый PIN не должен совпадать с текущим',
+        path: ['new_pin'],
+    });
+
+    const hashPin = (pin: string): string => {
+        const crypto = require('crypto');
+        return crypto.createHash('sha256').update(pin).digest('hex');
+    };
+
+    router.put('/pin', validateRequest({ body: changePinSchema }), async (req: Request, res: Response, next) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'auth_required',
+                        message: 'Требуется авторизация',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            if (!req.prisma) {
+                return respondWithDatabaseUnavailable(res, 'profile_pin', {
+                    traceId: req.traceId,
+                });
+            }
+
+            const { current_pin, new_pin } = req.validated?.body as z.infer<typeof changePinSchema>;
+
+            // Get current profile to verify current PIN
+            const profile = await profileService.getProfileById(req.profileId);
+            if (!profile) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'profile_not_found',
+                        message: 'Профиль не найден',
+                        statusCode: 404,
+                        category: 'not_found',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            // Verify current PIN
+            const currentPinHash = hashPin(current_pin);
+            if (profile.pinHash !== currentPinHash) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'invalid_pin',
+                        message: 'Неверный текущий PIN',
+                        statusCode: 403,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            // Update to new PIN
+            const newPinHash = hashPin(new_pin);
+            await profileService.updatePin(req.profileId, newPinHash);
+
+            await invalidateCachedResource('profileSummary', { profileId: req.profileId });
+
+            return respondWithSuccess(res, {
+                message: 'PIN успешно изменён',
+                changed_at: new Date().toISOString(),
+            }, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error) {
+            if (error instanceof z.ZodError) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'validation_failed',
+                        message: 'Некорректные данные',
+                        statusCode: 422,
+                        category: 'validation',
+                        details: error.issues,
+                        exposeDetails: true,
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+            next(error);
+        }
+    });
+
+    // DELETE /api/profile/cache - Clear server-side cache (SETTINGS-003)
+    router.delete('/cache', async (req: Request, res: Response, next) => {
+        try {
+            if (!req.profileId) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'auth_required',
+                        message: 'Требуется авторизация',
+                        statusCode: 401,
+                        category: 'authentication',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            const result = await invalidateAllUserCaches(req.profileId);
+
+            return respondWithSuccess(res, {
+                message: 'Кэш успешно очищен',
+                ...result,
+            }, {
+                meta: req.traceId ? { traceId: req.traceId } : undefined,
+            });
+        } catch (error) {
             next(error);
         }
     });

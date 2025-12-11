@@ -136,7 +136,7 @@ export const isSessionsDataUnavailableError = (error: unknown) =>
 export class SessionRepository {
     private plannedAtColumnAvailable = true;
 
-    constructor(private readonly prisma: SafePrismaClient) {}
+    constructor(private readonly prisma: SafePrismaClient) { }
 
     private markPlannedAtUnavailable(error?: unknown) {
         if (!this.plannedAtColumnAvailable) {
@@ -191,9 +191,6 @@ export class SessionRepository {
                             reps: true,
                             imageUrl: true,
                             imageUrl2: true,
-                            image1: true,
-                            image2: true,
-                            image3: true,
                             updatedAt: true,
                         },
                     },

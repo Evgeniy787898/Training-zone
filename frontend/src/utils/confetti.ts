@@ -1,10 +1,55 @@
 /**
  * Запускает анимацию конфетти
  * Легковесная реализация без внешних зависимостей
+ * 
+ * TODAY-U01: Оптимизация для слабых устройств и prefers-reduced-motion
  */
 
 const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff6b35', '#f7931e', '#fdc82f'];
 const emojis = ['🎉', '✨', '⭐', '💫', '🌟', '🎊'];
+
+/**
+ * Check if animations should be reduced or disabled
+ */
+function shouldReduceAnimations(): boolean {
+    // Check prefers-reduced-motion
+    if (typeof window !== 'undefined' && window.matchMedia) {
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (prefersReducedMotion) return true;
+    }
+    return false;
+}
+
+/**
+ * Detect weak device based on hardware capabilities
+ */
+function isWeakDevice(): boolean {
+    if (typeof navigator === 'undefined') return false;
+
+    // Check hardware concurrency (CPU cores)
+    const cores = (navigator as any).hardwareConcurrency || 4;
+    if (cores <= 2) return true;
+
+    // Check device memory (if available)
+    const memory = (navigator as any).deviceMemory;
+    if (memory && memory <= 2) return true;
+
+    // Check if touch-only mobile device (often lower-end)
+    const isTouchOnly = 'ontouchstart' in window && !window.matchMedia('(hover: hover)').matches;
+    const isSmallScreen = window.innerWidth < 400;
+    if (isTouchOnly && isSmallScreen) return true;
+
+    return false;
+}
+
+/**
+ * Get adjusted particle count based on device capabilities
+ */
+function getAdjustedParticleCount(requested: number): number {
+    if (shouldReduceAnimations()) return 0; // No confetti for reduced motion
+    if (isWeakDevice()) return Math.min(requested, 20); // Max 20 particles on weak devices
+    return requested;
+}
 
 function randomInRange(min: number, max: number): number {
     return Math.random() * (max - min) + min;
@@ -81,7 +126,11 @@ export function launchConfetti(options: {
         useEmoji = true,
     } = options;
 
-    for (let i = 0; i < particleCount; i++) {
+    // TODAY-U01: Apply device-aware optimization
+    const adjustedCount = getAdjustedParticleCount(particleCount);
+    if (adjustedCount === 0) return; // Skip entirely for reduced motion preference
+
+    for (let i = 0; i < adjustedCount; i++) {
         const particle = createParticle(origin.x, origin.y, useEmoji && i % 2 === 0);
         document.body.appendChild(particle);
 

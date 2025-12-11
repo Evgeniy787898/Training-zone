@@ -4,10 +4,12 @@ type Theme = 'light' | 'dark' | 'auto';
 type ResolvedTheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'tzona-theme';
+const HIGH_CONTRAST_KEY = 'tzona-high-contrast'; // THEME-F03
 
 // Shared state across all components
 const theme = ref<Theme>('auto');
 const resolvedTheme = ref<ResolvedTheme>('dark'); // Default to dark
+const highContrast = ref(false); // THEME-F03: High contrast mode
 
 /**
  * Get Telegram WebApp theme if available
@@ -114,6 +116,30 @@ export function useTheme() {
         setTheme(newTheme);
     }
 
+    // THEME-F03: High contrast mode for accessibility
+    function setHighContrast(enabled: boolean) {
+        highContrast.value = enabled;
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(HIGH_CONTRAST_KEY, enabled ? 'true' : 'false');
+        }
+        if (typeof document !== 'undefined') {
+            if (enabled) {
+                document.documentElement.classList.add('high-contrast');
+            } else {
+                document.documentElement.classList.remove('high-contrast');
+            }
+        }
+    }
+
+    function toggleHighContrast() {
+        setHighContrast(!highContrast.value);
+    }
+
+    function loadHighContrastFromStorage(): boolean {
+        if (typeof localStorage === 'undefined') return false;
+        return localStorage.getItem(HIGH_CONTRAST_KEY) === 'true';
+    }
+
     /**
      * Initialize theme on mount
      */
@@ -122,9 +148,13 @@ export function useTheme() {
         const storedTheme = loadThemeFromStorage();
         theme.value = storedTheme;
 
-        // Resolve and apply
+        // Resolve and apply theme
         const resolved = resolveTheme(storedTheme);
         applyTheme(resolved);
+
+        // THEME-F03: Load high-contrast setting
+        const storedHighContrast = loadHighContrastFromStorage();
+        setHighContrast(storedHighContrast);
 
         // Listen to system theme changes (only if theme is 'auto')
         if (typeof window !== 'undefined') {
@@ -158,8 +188,11 @@ export function useTheme() {
         theme: computed(() => theme.value),
         resolvedTheme: computed(() => resolvedTheme.value),
         isDark,
+        highContrast: computed(() => highContrast.value), // THEME-F03
         setTheme,
         toggleTheme,
+        setHighContrast,      // THEME-F03
+        toggleHighContrast,   // THEME-F03
         initializeTheme,
     };
 }

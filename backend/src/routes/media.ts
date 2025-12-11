@@ -119,7 +119,7 @@ type ExerciseLevelMediaRecord = Record<string, unknown> & { updatedAt: Date | st
 
 router.get(
     '/exercise-levels/:exerciseKey/:level/:slot',
-    mediaLimiter,
+    mediaLimiter as any,
     validateRequest({ params: exerciseLevelImageParams, query: exerciseLevelImageQuery }),
     async (req: Request, res: Response) => {
         if (!req.prisma) {

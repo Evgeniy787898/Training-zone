@@ -117,6 +117,59 @@ export class SessionService {
         return { weekStart, weekEnd, sessions: hydrated };
     }
 
+    async getHistory(profileId: string, page = 1, pageSize = 20) {
+        if (page < 1 || pageSize < 1) {
+            throw new AppError({
+                code: 'invalid_pagination',
+                message: 'Некорректные параметры пагинации',
+                statusCode: 400,
+                category: 'validation',
+            });
+        }
+
+        const skip = (page - 1) * pageSize;
+        const sessions = await this.repository.fetchHistory(profileId, pageSize, skip);
+        const hydrated = await this.repository.hydrateSessions(sessions);
+
+        return { items: hydrated };
+    }
+
+    /**
+     * Returns the most recent completed session before the given date.
+     * Used for comparing current training with previous performance (GAP-002).
+     */
+    async getPreviousSession(profileId: string, beforeDate?: string) {
+        const referenceDate = beforeDate ? parseISO(beforeDate) : new Date();
+        if (!isValid(referenceDate)) {
+            throw buildInvalidDateError();
+        }
+
+        // Look back 90 days for a previous session
+        const lookbackEnd = startOfDay(referenceDate);
+        const lookbackStart = addDays(lookbackEnd, -90);
+
+        const sessions = await this.repository.fetchSessionsWithinRange(profileId, lookbackStart, lookbackEnd);
+
+        // Filter to completed sessions before the reference date and sort by date descending
+        const previousSessions = (sessions || [])
+            .filter((s: any) => {
+                const sessionDate = s.plannedAt || s.createdAt;
+                return sessionDate && new Date(sessionDate) < referenceDate;
+            })
+            .sort((a: any, b: any) => {
+                const dateA = new Date(a.plannedAt || a.createdAt);
+                const dateB = new Date(b.plannedAt || b.createdAt);
+                return dateB.getTime() - dateA.getTime();
+            });
+
+        if (previousSessions.length === 0) {
+            return { session: null };
+        }
+
+        const [hydrated] = await this.repository.hydrateSessions([previousSessions[0]]);
+        return { session: hydrated ?? previousSessions[0] };
+    }
+
     async getSessionById(
         profileId: string,
         sessionId: string,
@@ -290,5 +343,60 @@ export class SessionService {
 
         await this.repository.deleteSession(session.id);
         await invalidateSessionDerivedCaches(profileId);
+    }
+
+    /**
+     * WEEK-F02: Delete all incomplete/draft sessions within the specified week.
+     * Only deletes sessions that are NOT status='done' (i.e., planned but not completed).
+     */
+    async deleteWeekDraftSessions(
+        profileId: string,
+        weekStartDate: string,
+        weekEndDate: string,
+    ): Promise<number> {
+        const weekStart = startOfDay(parseISO(weekStartDate));
+        const weekEnd = endOfDay(parseISO(weekEndDate));
+
+        if (!isValid(weekStart) || !isValid(weekEnd)) {
+            throw buildInvalidDateError();
+        }
+
+        const sessions = await this.repository.fetchSessionsWithinRange(profileId, weekStart, weekEnd);
+
+        // Filter to only draft/planned sessions (not completed)
+        const draftSessions = (sessions || []).filter(
+            (s: any) => s.status !== 'done' && s.status !== 'completed'
+        );
+
+        let deletedCount = 0;
+        for (const session of draftSessions) {
+            await this.repository.deleteSession(session.id);
+            deletedCount++;
+        }
+
+        if (deletedCount > 0) {
+            await invalidateSessionDerivedCaches(profileId);
+        }
+
+        return deletedCount;
+    }
+
+    /**
+     * WEEK-F02: Regenerate sessions from user's active training program.
+     * Returns the number of sessions created.
+     */
+    async regenerateWeekFromProgram(
+        profileId: string,
+        weekStartDate: string,
+    ): Promise<number> {
+        // For now, this is a placeholder that returns 0
+        // Full implementation would require:
+        // 1. Get user's active training program
+        // 2. Get the current week number in the program
+        // 3. Create sessions for each training day in the program week
+        console.log('[WEEK-F02] regenerateWeekFromProgram called', { profileId, weekStartDate });
+
+        // TODO: Implement full program-based regeneration when user-programs are fully integrated
+        return 0;
     }
 }
