@@ -65,7 +65,7 @@ const PREDICTIVE_ROUTE_TASKS: Record<AppRouteSlug, PrefetchTask[]> = {
     history: [],
     onboarding: [],
     progressPhotos: [],
-    digitalLab: [],
+    evolution: [],
 };
 
 const CRITICAL_MEDIA_ASSETS: readonly PrefetchAsset[] = [

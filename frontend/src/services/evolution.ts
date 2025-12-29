@@ -1,5 +1,4 @@
 import api from './api';
-import type { AxiosResponse } from 'axios';
 
 export interface Evolution360Status {
     current: boolean;
@@ -11,7 +10,13 @@ export interface Evolution360Frames {
     count: number;
 }
 
-export interface Evolution360UploadResult {
+export interface FrameUploadResult {
+    frameIndex: number;
+    imageUrl: string;
+    success: boolean;
+}
+
+export interface FinalizeScanResult {
     id: string;
     scanType: string;
     frameCount: number;
@@ -44,23 +49,57 @@ class EvolutionService {
     }
 
     /**
-     * Upload ZIP file with frames
+     * Start a new upload session (clears old data)
      */
-    async uploadZip(scanType: 'current' | 'goal', file: File): Promise<Evolution360UploadResult> {
-        const formData = new FormData();
-        formData.append('zipFile', file);
+    async startUpload(scanType: 'current' | 'goal'): Promise<void> {
+        await api.post(`/evolution/${scanType}/start`);
+    }
 
-        const response: AxiosResponse<{ data: Evolution360UploadResult }> = await api.post(
-            `/evolution/${scanType}`,
+    /**
+     * Upload a single frame
+     */
+    async uploadFrame(
+        scanType: 'current' | 'goal',
+        frameIndex: number,
+        arrayBuffer: ArrayBuffer,
+        mimeType: string
+    ): Promise<FrameUploadResult> {
+        // Create File object from ArrayBuffer with proper MIME type
+        const blob = new Blob([arrayBuffer], { type: mimeType });
+        const ext = mimeType.split('/')[1] || 'jpg';
+        const file = new File([blob], `frame_${String(frameIndex).padStart(3, '0')}.${ext}`, { type: mimeType });
+
+        const formData = new FormData();
+        formData.append('frame', file);
+        formData.append('frameIndex', String(frameIndex));
+
+        // CRITICAL: Set Content-Type to undefined to let browser set it with boundary
+        // axios instance has default Content-Type: application/json which breaks FormData
+        const response = await api.post<{ data: FrameUploadResult }>(
+            `/evolution/${scanType}/frame`,
             formData,
             {
+                timeout: 30000,
                 headers: {
-                    'Content-Type': 'multipart/form-data',
+                    'Content-Type': undefined as any, // Clear default Content-Type
                 },
-                timeout: 120000, // 2 min timeout for large uploads
             }
         );
-        return unwrapData<Evolution360UploadResult>(response.data);
+        return unwrapData<FrameUploadResult>(response.data);
+    }
+
+    /**
+     * Finalize upload and create DB records
+     */
+    async finalizeScan(
+        scanType: 'current' | 'goal',
+        frames: Array<{ frameIndex: number; imageUrl: string }>
+    ): Promise<FinalizeScanResult> {
+        const response = await api.post<{ data: FinalizeScanResult }>(
+            `/evolution/${scanType}/finalize`,
+            { frames }
+        );
+        return unwrapData<FinalizeScanResult>(response.data);
     }
 
     /**
@@ -81,7 +120,52 @@ class EvolutionService {
             return false;
         }
     }
+
+    /**
+     * Get preview (first frame) for a scan type (D6)
+     */
+    async getPreview(scanType: 'current' | 'goal'): Promise<string | null> {
+        try {
+            const response = await api.get(`/evolution/${scanType}/preview`, {
+                responseType: 'blob'
+            });
+            return URL.createObjectURL(response.data);
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Upload ZIP file to server for processing
+     * Server will extract images and upload to Supabase
+     */
+    async uploadZip(
+        scanType: 'current' | 'goal',
+        zipFile: File | Blob,
+        onProgress?: (percent: number) => void
+    ): Promise<{ scanId: string; frameCount: number; frames: string[] }> {
+        const formData = new FormData();
+        formData.append('file', zipFile);
+
+        const response = await api.post<{ data: { scanId: string; frameCount: number; frames: string[] } }>(
+            `/evolution/${scanType}/upload-zip`,
+            formData,
+            {
+                timeout: 300000, // 5 minutes for large ZIPs
+                headers: {
+                    'Content-Type': undefined as any, // Let browser set with boundary
+                },
+                onUploadProgress: (progressEvent) => {
+                    if (progressEvent.total && onProgress) {
+                        const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                        onProgress(percent);
+                    }
+                }
+            }
+        );
+
+        return unwrapData<{ scanId: string; frameCount: number; frames: string[] }>(response.data);
+    }
 }
 
 export const evolutionService = new EvolutionService();
-

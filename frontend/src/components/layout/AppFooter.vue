@@ -2,7 +2,9 @@
   <footer ref="footerRef" class="app-footer">
     <Navigation
       :active-tab="activeTab"
+      :ai-active="aiActive"
       @tab-change="$emit('tabChange', $event)"
+      @ai-click="$emit('aiClick')"
       variant="bottom"
     />
   </footer>
@@ -16,10 +18,12 @@ const Navigation = createLazyComponent(() => import('@/modules/shared/components
 
 defineProps<{
   activeTab: string;
+  aiActive?: boolean;
 }>();
 
 defineEmits<{
   (e: 'tabChange', tabId: string): void;
+  (e: 'aiClick'): void;
 }>();
 
 const footerRef = ref<HTMLElement | null>(null);

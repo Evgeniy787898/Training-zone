@@ -48,7 +48,7 @@ function normalizeApiBaseURL(): string {
     return `${trimmed}/api`;
 }
 
-const api: AxiosInstance = axios.create({
+export const api: AxiosInstance = axios.create({
     baseURL: normalizeApiBaseURL(),
     headers: {
         'Content-Type': 'application/json',
@@ -290,6 +290,131 @@ interface AssistantNotesQueryParams {
     pageSize?: number;
 }
 
+// AI Personal Instructions Types (PERS-INS-002)
+export type AiInstructionType = 'name' | 'address' | 'injury' | 'preference' | 'prohibition' | 'style' | 'note';
+
+export interface AiInstruction {
+    type: AiInstructionType;
+    value: string;
+    priority?: number;
+}
+
+export interface AiInstructionsResponse {
+    instructions: AiInstruction[];
+    count: number;
+    maxAllowed: number;
+}
+
+export interface AiInstructionsUpdateResponse {
+    success: boolean;
+    instructions: AiInstruction[];
+    count: number;
+}
+
+// AI Self-Learning types (SELF-001, ML-001, LEARN-001)
+export interface LearnedInstruction {
+    id: string;
+    content: string;
+    category: 'response_style' | 'topic_handling' | 'error_recovery' | 'personalization' | 'safety';
+    confidence: number;
+    successRate: number;
+    usageCount: number;
+    source: 'auto_generated' | 'user_feedback' | 'admin' | 'baseline';
+    isActive: boolean;
+    createdAt: string;
+}
+
+export interface LearnedInstructionsResponse {
+    instructions: LearnedInstruction[];
+    count: number;
+    promptAddition: string;
+    note?: string;
+}
+
+export interface TriggerLearningResponse {
+    generated: number;
+    instructions: Array<{
+        id: string;
+        content: string;
+        category: string;
+        confidence: number;
+    }>;
+    note?: string;
+}
+
+export interface LearningProfileResponse {
+    exists: boolean;
+    communicationStyle?: {
+        preferredLength: 'short' | 'medium' | 'long';
+        formalityLevel: number;
+        humorAppreciation: number;
+        emojiUsage: number;
+        technicalLevel: number;
+    };
+    topics?: {
+        interested: string[];
+        avoided: string[];
+        expertiseAreas: string[];
+    };
+    patterns?: {
+        activeHours: number[];
+        activeDays: number[];
+        avgSessionLength: number;
+        avgMessagesPerSession: number;
+    };
+    emotionalPatterns?: {
+        typicalMood: string;
+        motivationTriggers: string[];
+        stressIndicators: string[];
+    };
+    lastUpdated?: string;
+    note?: string;
+}
+
+// Music Track types
+export interface MusicTrackData {
+    id: string;
+    name: string;
+    fileName: string;
+    storageUrl: string;
+    duration?: number;
+    fileSize?: number;
+    mimeType?: string;
+    uploadedAt: string;
+}
+
+// Exercise Set types
+export interface ExerciseSetResultData {
+    id: string;
+    sessionId: string;
+    exerciseKey: string;
+    setIndex: number;
+    targetReps: number;
+    actualReps: number;
+    rpe?: number;
+    durationSeconds?: number;
+    restAfterSeconds?: number;
+    createdAt: string;
+}
+
+export interface ExerciseSetResultInput {
+    exerciseKey: string;
+    setIndex: number;
+    targetReps: number;
+    actualReps: number;
+    rpe?: number;
+    durationSeconds?: number;
+    restAfterSeconds?: number;
+}
+
+export interface ExerciseSetHistoryItem {
+    sessionId: string;
+    date: string;
+    sets: number;
+    totalReps: number;
+    avgRpe?: number;
+}
+
 const unwrapApiData = <T>(payload: any): T => {
     if (payload && typeof payload === 'object' && 'data' in payload && (payload as any).data !== undefined) {
         return (payload as any).data as T;
@@ -346,6 +471,7 @@ export interface ApiClient {
     saveUserProgram: (payload: UserProgramRequest) => Promise<UserProgramSnapshot>;
     createUserProgram: (payload: UserProgramRequest) => Promise<UserProgramSnapshot>;
     updateUserProgram: (payload: UserProgramUpdateRequest) => Promise<UserProgramSnapshot>;
+    updateExerciseProgression: (payload: { exerciseKey: string; newLevel: number; newTier: number }) => Promise<{ message: string; exerciseKey: string; newLevel: string }>;
 
     // Daily Advice
     getDailyAdvice: (date?: string) => Promise<DailyAdvice>;
@@ -356,8 +482,28 @@ export interface ApiClient {
     getAssistantNotes: (params?: AssistantNotesQueryParams) => Promise<AssistantNotesResponse>;
     createAssistantNote: (payload: { title?: string; content: string; tags?: string[] }) => Promise<CreateAssistantNoteResponse>;
 
+    // AI Personal Instructions (PERS-INS-002)
+    getAiInstructions: () => Promise<AiInstructionsResponse>;
+    updateAiInstructions: (instructions: AiInstruction[]) => Promise<AiInstructionsUpdateResponse>;
+    deleteAiInstructionsByType: (type: AiInstructionType) => Promise<{ success: boolean; removed: number; remaining: number }>;
+
+    // AI Self-Learning (SELF-001, ML-001, LEARN-001)
+    getLearnedInstructions: () => Promise<LearnedInstructionsResponse>;
+    triggerLearning: () => Promise<TriggerLearningResponse>;
+    getLearningProfile: () => Promise<LearningProfileResponse>;
+
     // Analytics
     getAnalyticsVisualization: (type: VisualizationType, filters?: AnalyticsFilters) => Promise<VisualizationResponse>;
+
+    // Music
+    getMusicTracks: () => Promise<{ tracks: MusicTrackData[] }>;
+    uploadMusicTrack: (file: File, name?: string) => Promise<{ track: MusicTrackData }>;
+    deleteMusicTrack: (trackId: string) => Promise<{ message: string }>;
+
+    // Exercise Sets
+    getExerciseSetResults: (sessionId: string) => Promise<{ results: ExerciseSetResultData[] }>;
+    saveExerciseSetResults: (sessionId: string, results: ExerciseSetResultInput[]) => Promise<{ message: string; saved: number }>;
+    getExerciseSetHistory: (exerciseKey: string, limit?: number) => Promise<{ exerciseKey: string; history: ExerciseSetHistoryItem[] }>;
 
     // Core
     streamRequest: (endpoint: string, payload: any, onEvent: (event: { type: string; data: any }) => void) => Promise<void>;
@@ -800,6 +946,19 @@ export const apiClient: ApiClient = {
         }
     },
 
+    // Update exercise level after progression recommendation is accepted
+    updateExerciseProgression: async (payload: { exerciseKey: string; newLevel: number; newTier: number }) => {
+        try {
+            const response = await api.patch<{ data: { message: string; exerciseKey: string; newLevel: string } }>(
+                '/user-programs/progression',
+                payload
+            );
+            return unwrapApiData<{ message: string; exerciseKey: string; newLevel: string }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'updateExerciseProgression');
+        }
+    },
+
     // Daily Advice
     getDailyAdvice: async (date?: string) => {
         try {
@@ -1046,6 +1205,78 @@ export const apiClient: ApiClient = {
         }
     },
 
+    // AI Personal Instructions (PERS-INS-002)
+    getAiInstructions: async () => {
+        try {
+            const response = await api.get<{ data: AiInstructionsResponse }>('/assistant/instructions');
+            return unwrapApiData<AiInstructionsResponse>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getAiInstructions');
+        }
+    },
+    updateAiInstructions: async (instructions: AiInstruction[]) => {
+        try {
+            const response = await api.put<{ data: AiInstructionsUpdateResponse }>('/assistant/instructions', {
+                instructions,
+            });
+            return unwrapApiData<AiInstructionsUpdateResponse>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'updateAiInstructions');
+        }
+    },
+    deleteAiInstructionsByType: async (type: AiInstructionType) => {
+        try {
+            const response = await api.delete<{ data: { success: boolean; removed: number; remaining: number } }>(
+                `/assistant/instructions/${type}`
+            );
+            return unwrapApiData<{ success: boolean; removed: number; remaining: number }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'deleteAiInstructionsByType');
+        }
+    },
+
+    // AI Self-Learning (SELF-001, ML-001, LEARN-001)
+    getLearnedInstructions: async () => {
+        try {
+            const response = await api.get<{ data: LearnedInstructionsResponse }>('/assistant/learned-instructions');
+            return unwrapApiData<LearnedInstructionsResponse>(response.data);
+        } catch (error) {
+            // Return empty result if endpoint doesn't exist yet
+            console.warn('[API] getLearnedInstructions error:', error);
+            return {
+                instructions: [],
+                count: 0,
+                promptAddition: '',
+                note: 'Self-learning may not be available yet',
+            };
+        }
+    },
+    triggerLearning: async () => {
+        try {
+            const response = await api.post<{ data: TriggerLearningResponse }>('/assistant/trigger-learning');
+            return unwrapApiData<TriggerLearningResponse>(response.data);
+        } catch (error) {
+            console.warn('[API] triggerLearning error:', error);
+            return {
+                generated: 0,
+                instructions: [],
+                note: 'Self-learning trigger may not be available yet',
+            };
+        }
+    },
+    getLearningProfile: async () => {
+        try {
+            const response = await api.get<{ data: LearningProfileResponse }>('/assistant/learning-profile');
+            return unwrapApiData<LearningProfileResponse>(response.data);
+        } catch (error) {
+            console.warn('[API] getLearningProfile error:', error);
+            return {
+                exists: false,
+                note: 'Learning profile may not be available yet',
+            };
+        }
+    },
+
     // Analytics
     getAnalyticsVisualization: async (type: VisualizationType, filters: AnalyticsFilters = {}) => {
         try {
@@ -1053,6 +1284,63 @@ export const apiClient: ApiClient = {
             return unwrapApiData<VisualizationResponse>(response.data);
         } catch (error) {
             throw ErrorHandler.handle(error, 'getAnalyticsVisualization');
+        }
+    },
+
+    // Music
+    getMusicTracks: async () => {
+        try {
+            const response = await api.get<{ data: { tracks: MusicTrackData[] } }>('/music/tracks');
+            return unwrapApiData<{ tracks: MusicTrackData[] }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getMusicTracks');
+        }
+    },
+    uploadMusicTrack: async (file: File, name?: string) => {
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (name) formData.append('name', name);
+            const response = await api.post<{ data: { track: MusicTrackData } }>('/music/tracks', formData, {
+                headers: { 'Content-Type': 'multipart/form-type' },
+            });
+            return unwrapApiData<{ track: MusicTrackData }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'uploadMusicTrack');
+        }
+    },
+    deleteMusicTrack: async (trackId: string) => {
+        try {
+            const response = await api.delete<{ data: { message: string } }>(`/music/tracks/${trackId}`);
+            return unwrapApiData<{ message: string }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'deleteMusicTrack');
+        }
+    },
+
+    // Exercise Sets
+    getExerciseSetResults: async (sessionId: string) => {
+        try {
+            const response = await api.get<{ data: { results: ExerciseSetResultData[] } }>(`/exercise-sets?sessionId=${sessionId}`);
+            return unwrapApiData<{ results: ExerciseSetResultData[] }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getExerciseSetResults');
+        }
+    },
+    saveExerciseSetResults: async (sessionId: string, results: ExerciseSetResultInput[]) => {
+        try {
+            const response = await api.post<{ data: { message: string; saved: number } }>('/exercise-sets', { sessionId, results });
+            return unwrapApiData<{ message: string; saved: number }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'saveExerciseSetResults');
+        }
+    },
+    getExerciseSetHistory: async (exerciseKey: string, limit = 10) => {
+        try {
+            const response = await api.get<{ data: { exerciseKey: string; history: ExerciseSetHistoryItem[] } }>(`/exercise-sets/history/${exerciseKey}?limit=${limit}`);
+            return unwrapApiData<{ exerciseKey: string; history: ExerciseSetHistoryItem[] }>(response.data);
+        } catch (error) {
+            throw ErrorHandler.handle(error, 'getExerciseSetHistory');
         }
     },
 };

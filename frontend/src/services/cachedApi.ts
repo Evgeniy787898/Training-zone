@@ -677,6 +677,14 @@ export const cachedApiClient = {
         return data;
     },
 
+    // Update exercise progression level (for progression system)
+    updateExerciseProgression: async (payload: { exerciseKey: string; newLevel: number; newTier: number }) => {
+        const data = await apiClient.updateExerciseProgression(payload);
+        // Очищаем кэш программы пользователя после обновления уровня
+        apiCache.delete('userProgram');
+        return data;
+    },
+
     // Daily Advice
     getDailyAdvice: async (date?: string) => {
         const cacheKey = `dailyAdvice_${date || 'today'} `;

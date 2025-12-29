@@ -1,13 +1,20 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" style="background: #050505;">
 
 <head>
     <meta charset="UTF-8" />
+    <style>
+        /* Critical: Dark background before any CSS loads */
+        html, body { background: #050505; color: #f4f4f5; margin: 0; padding: 0; }
+        #app { background: #050505; min-height: 100vh; min-height: 100dvh; }
+    </style>
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' https://*.supabase.co https://*.ngrok-free.dev https://*.ngrok.io https://telegram.org wss://*.ngrok-free.dev wss://*.ngrok.io; img-src 'self' data: blob: https://*.supabase.co https:; font-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https:; media-src 'self' blob: data: https://*.ngrok-free.dev https://*.ngrok.io;" />
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>TZONA V2 - Программы тренировок</title>
     <meta name="description" content="Персональные тренировки TZONA: дневник, программы, AI ассистент." />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#050505" />
     <meta property="og:title" content="TZONA V2 - Тренировочный дневник" />
     <meta property="og:description" content="Умный дневник тренировок с AI ассистентом." />
     <meta property="og:type" content="website" />
@@ -19,9 +26,29 @@
     <!--preload-links-->
     <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script>
+        // Global Error Handler for Mobile Debugging
+        window.addEventListener('error', function (event) {
+            showError('JS Error: ' + event.message + ' at ' + event.filename + ':' + event.lineno);
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+            showError('Promise Error: ' + (event.reason ? (event.reason.message || event.reason) : 'Unknown'));
+        });
+        function showError(msg) {
+            if (msg.includes('ResizeObserver')) return; // Ignore common benign error
+            var el = document.getElementById('debug-error-overlay');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'debug-error-overlay';
+                el.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);color:#ff5555;z-index:99999;padding:20px;font-family:monospace;white-space:pre-wrap;overflow:auto;pointer-events:none;';
+                document.body.appendChild(el);
+            }
+            el.textContent += msg + '\n\n';
+        }
+    </script>
 </head>
 
-<body>
+<body style="background: #050505;">
     <div id="app" class="tg-container"><!--app-html--></div>
     <!--pinia-state-->
     <script type="module" src="/src/main.ts"></script>

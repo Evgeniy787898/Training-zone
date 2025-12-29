@@ -1,6 +1,6 @@
 """AI Advisor Service Configuration.
 
-Simplified for Gemini-only (MIGRATE-001/003).
+Supports OpenAI (gpt-4.1-nano) and Gemini providers.
 Model selection strategy: Flash 90%, Pro 10% (COST-001).
 """
 
@@ -18,9 +18,8 @@ if SERVICES_DIR.exists() and str(SERVICES_DIR) not in sys.path:
 from python_shared.config import parse_float, parse_int, BaseServiceConfig
 
 
-# Model selection strategy (COST-001)
-# Flash: fast, cheap, good for chat/advice (90% of requests)
-# Pro: powerful, expensive, for complex analysis (10% of requests)
+# Default models
+DEFAULT_OPENAI_MODEL = "gpt-4.1-nano"  # Cheapest OpenAI model
 FLASH_MODEL = "gemini-1.5-flash"
 PRO_MODEL = "gemini-1.5-pro"
 
@@ -34,11 +33,16 @@ PRO_TASKS = frozenset({
 TaskType = Literal["chat", "advice", "motivation", "analysis", "program_generation", "complex_analysis", "injury_assessment"]
 
 
-def get_model_for_task(task_type: TaskType) -> str:
+def get_model_for_task(task_type: TaskType, provider: str) -> str:
     """Get optimal model for task type (COST-001).
     
-    Returns Flash (cheaper) for most tasks, Pro for complex analysis.
+    Returns cheaper model for most tasks, expensive for complex analysis.
     """
+    if provider == "openai":
+        # OpenAI uses same model for all tasks (gpt-4.1-nano is cheap enough)
+        return DEFAULT_OPENAI_MODEL
+    
+    # Gemini: Flash for most, Pro for complex
     if task_type in PRO_TASKS:
         return PRO_MODEL
     return FLASH_MODEL
@@ -47,28 +51,51 @@ def get_model_for_task(task_type: TaskType) -> str:
 class AIAdvisorConfig(BaseServiceConfig):
     """AI Advisor service configuration from environment.
     
-    Simplified for Gemini-only. All other providers have been removed.
+    Supports both OpenAI and Gemini providers.
+    Default: OpenAI with gpt-4.1-nano (cheapest).
     """
 
     def __init__(self) -> None:
         super().__init__()
         
-        # AI Provider (Gemini-only, kept for backward compatibility)
-        self.provider = os.getenv("AI_ADVISOR_PROVIDER", "gemini").strip().lower()
-        self.model = os.getenv("AI_ADVISOR_MODEL", FLASH_MODEL).strip()
-        self.pro_model = PRO_MODEL  # For complex tasks
+        # AI Provider - auto-detect based on available API key
+        self.provider = os.getenv("AI_ADVISOR_PROVIDER", "").strip().lower()
+        
+        # OpenAI settings
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        
+        # Gemini settings (backward compatibility)
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        
+        # Auto-detect provider if not specified
+        if not self.provider:
+            if self.openai_api_key:
+                self.provider = "openai"
+            elif self.gemini_api_key:
+                self.provider = "gemini"
+            else:
+                self.provider = "openai"  # Default to OpenAI
+        
+        # Model selection based on provider
+        if self.provider == "openai":
+            self.model = os.getenv("AI_ADVISOR_MODEL", DEFAULT_OPENAI_MODEL).strip()
+        else:
+            self.model = os.getenv("AI_ADVISOR_MODEL", FLASH_MODEL).strip()
+        
+        self.pro_model = PRO_MODEL  # For complex tasks (Gemini)
         self.base_prompt = os.getenv("AI_ADVISOR_BASE_PROMPT", "").strip()
         self.temperature = parse_float(os.getenv("AI_ADVISOR_TEMPERATURE"), 0.2)
         self.max_tokens = parse_int(os.getenv("AI_ADVISOR_MAX_TOKENS"), 800)
 
-        # API Key (Gemini-only)
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-
-        # Cost tracking (COST-001)
-        # Flash: $0.075/1M input, $0.30/1M output
-        # Pro: $1.25/1M input, $5.00/1M output
-        self.cost_input_per_1k = parse_float(os.getenv("AI_ADVISOR_COST_INPUT_PER_1K_USD"), 0.000075)
-        self.cost_output_per_1k = parse_float(os.getenv("AI_ADVISOR_COST_OUTPUT_PER_1K_USD"), 0.0003)
+        # Cost tracking (gpt-4.1-nano pricing)
+        # Input: $0.20/1M, Output: $0.80/1M
+        if self.provider == "openai":
+            self.cost_input_per_1k = parse_float(os.getenv("AI_ADVISOR_COST_INPUT_PER_1K_USD"), 0.0002)
+            self.cost_output_per_1k = parse_float(os.getenv("AI_ADVISOR_COST_OUTPUT_PER_1K_USD"), 0.0008)
+        else:
+            # Gemini Flash pricing
+            self.cost_input_per_1k = parse_float(os.getenv("AI_ADVISOR_COST_INPUT_PER_1K_USD"), 0.000075)
+            self.cost_output_per_1k = parse_float(os.getenv("AI_ADVISOR_COST_OUTPUT_PER_1K_USD"), 0.0003)
 
     def validate(self) -> None:
         """Validate required configuration."""
@@ -77,22 +104,32 @@ class AIAdvisorConfig(BaseServiceConfig):
         if not self.base_prompt:
             raise RuntimeError("AI_ADVISOR_BASE_PROMPT is required")
 
-        # Check Gemini API key
-        if not self.gemini_api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is required. "
-                "Get your key at https://aistudio.google.com/apikey"
-            )
+        # Check API key for selected provider
+        if self.provider == "openai":
+            if not self.openai_api_key:
+                raise RuntimeError(
+                    "OPENAI_API_KEY is required for OpenAI provider. "
+                    "Get your key at https://platform.openai.com/api-keys"
+                )
+        elif self.provider == "gemini":
+            if not self.gemini_api_key:
+                raise RuntimeError(
+                    "GEMINI_API_KEY is required for Gemini provider. "
+                    "Get your key at https://aistudio.google.com/apikey"
+                )
 
     def get_api_key(self) -> str:
-        """Get API key (Gemini-only)."""
+        """Get API key for configured provider."""
+        if self.provider == "openai":
+            return self.openai_api_key
         return self.gemini_api_key
 
     def get_model(self, task_type: TaskType = "advice") -> str:
         """Get model for task type (COST-001)."""
-        return get_model_for_task(task_type)
+        return get_model_for_task(task_type, self.provider)
 
 
 # Global config instance
 config = AIAdvisorConfig()
+
 

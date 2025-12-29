@@ -206,7 +206,7 @@ export function createAuthRouter(
     // POST /api/auth/verify-pin
     router.post('/verify-pin', verifyPinLimiter, validateRequest({ body: verifyPinSchema }), async (req: Request, res: Response, next) => {
         try {
-            console.log('[verify-pin] Request body:', JSON.stringify(req.body));
+            console.log('[verify-pin] START request');
             console.log('[verify-pin] Headers:', {
                 'x-telegram-id': req.header('x-telegram-id'),
                 'x-telegram-init-data': req.header('x-telegram-init-data') ? 'present' : 'missing',
@@ -214,15 +214,20 @@ export function createAuthRouter(
                 'authorization': req.header('authorization') ? 'present' : 'missing'
             });
 
+            const body = req.body;
+            console.log('[verify-pin] Body keys:', Object.keys(body));
+
             const { pin, telegram_id, initData } = req.validated?.body as VerifyPinPayload;
             const prisma = req.prisma;
 
+            // Explicit check for Prisma connection
             if (!prisma) {
+                console.error('[verify-pin] CRITICAL: req.prisma is undefined!');
                 return respondWithAppError(
                     res,
                     new AppError({
                         code: 'database_unavailable',
-                        message: 'Database connection not available',
+                        message: 'Database connection not available (req.prisma missing)',
                         statusCode: 500,
                         category: 'dependencies',
                     }),
@@ -677,7 +682,7 @@ export function createAuthRouter(
                 return respondWithAppError(
                     res,
                     new AppError({
-                        code: 'unauthorized',
+                        code: ERROR_CODES.UNAUTHORIZED,
                         message: 'Требуется авторизация для смены PIN',
                         statusCode: 401,
                         category: 'authentication',

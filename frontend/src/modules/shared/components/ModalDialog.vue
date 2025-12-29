@@ -20,7 +20,7 @@
           <header v-if="$slots.header || title" class="app-modal__header">
             <slot name="header">
               <div class="app-modal__title-group">
-                <AppIcon v-if="icon" :name="icon" :variant="iconVariant" :size="28" />
+                <!-- <AppIcon v-if="icon" :name="icon" :variant="iconVariant" :size="28" /> -->
                 <p v-if="eyebrow" class="app-modal__eyebrow">{{ eyebrow }}</p>
                 <h2 v-if="title" :id="titleId" class="app-modal__title">{{ title }}</h2>
               </div>
@@ -52,16 +52,14 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
-import AppIcon from '@/modules/shared/components/AppIcon.vue';
 import BaseButton from '@/components/ui/BaseButton.vue';
-import type { IconName } from '@/modules/shared/icons/registry';
 
 const props = withDefaults(
   defineProps<{
     modelValue: boolean;
     title?: string;
     eyebrow?: string;
-    icon?: IconName;
+    icon?: string;
     iconVariant?: 'lime' | 'emerald' | 'violet' | 'amber' | 'aqua' | 'neutral';
     size?: 'sm' | 'md' | 'lg' | 'xl';
     persistent?: boolean;

@@ -52,7 +52,26 @@ export type IconName =
   | 'check'
   | 'search'
   | 'heartFilled'
-  | 'wifiOff';
+  | 'wifiOff'
+  | 'camera'
+  | 'mic'
+  | 'micOff'
+  | 'arrowUp'
+  | 'sun'
+  | 'moon'
+  | 'lock'
+  | 'unlock'
+  | 'logOut'
+  | 'hardDrive'
+  | 'trash'
+  | 'cloud'
+  | 'loader'
+  | 'refresh'
+  | 'messageCircle'
+  | 'x'
+  | 'copy'
+  | 'volume'
+  | 'smile';
 
 type IconFactory = () => Component;
 
@@ -333,6 +352,113 @@ const ICONS: Record<IconName, IconFactory> = {
       h('path', { d: 'M10.71 5.05a16 16 0 0 1 11.06 4.19' }),
       h('path', { d: 'M1.42 9c.74-.58 1.53-1.1 2.37-1.55' }),
       h('path', { d: 'M12 20h.01' }),
+    ], { strokeWidth: '1.6' }),
+  camera: () =>
+    strokeIcon([
+      h('path', { d: 'M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z' }),
+      h('circle', { cx: '12', cy: '13', r: '4' }),
+    ], { strokeWidth: '1.6' }),
+  mic: () =>
+    strokeIcon([
+      h('path', { d: 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z' }),
+      h('path', { d: 'M19 10v2a7 7 0 0 1-14 0v-2' }),
+      h('path', { d: 'M12 19v4M8 23h8' }),
+    ], { strokeWidth: '1.6' }),
+  micOff: () =>
+    strokeIcon([
+      h('path', { d: 'M1 1l22 22' }),
+      h('path', { d: 'M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6' }),
+      h('path', { d: 'M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .49-.05.97-.15 1.43' }),
+      h('path', { d: 'M12 19v4M8 23h8' }),
+    ], { strokeWidth: '1.6' }),
+  arrowUp: () =>
+    strokeIcon([
+      h('path', { d: 'M12 19V5M5 12l7-7 7 7' }),
+    ], { strokeWidth: '1.6' }),
+  sun: () =>
+    strokeIcon([
+      h('circle', { cx: '12', cy: '12', r: '5' }),
+      h('path', { d: 'M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42' }),
+    ], { strokeWidth: '1.6' }),
+  moon: () =>
+    strokeIcon([
+      h('path', { d: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' }),
+    ], { strokeWidth: '1.6' }),
+  lock: () =>
+    strokeIcon([
+      h('rect', { x: '3', y: '11', width: '18', height: '11', rx: '2', ry: '2' }),
+      h('path', { d: 'M7 11V7a5 5 0 0 1 10 0v4' }),
+    ], { strokeWidth: '1.6' }),
+  unlock: () =>
+    strokeIcon([
+      h('rect', { x: '3', y: '11', width: '18', height: '11', rx: '2', ry: '2' }),
+      h('path', { d: 'M7 11V7a5 5 0 0 1 9.9-1' }),
+    ], { strokeWidth: '1.6' }),
+  logOut: () =>
+    strokeIcon([
+      h('path', { d: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4' }),
+      h('polyline', { points: '16 17 21 12 16 7' }),
+      h('line', { x1: '21', y1: '12', x2: '9', y2: '12' }),
+    ], { strokeWidth: '1.6' }),
+  hardDrive: () =>
+    strokeIcon([
+      h('path', { d: 'M22 12H2' }),
+      h('path', { d: 'M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' }),
+      h('circle', { cx: '6', cy: '16', r: '1' }),
+      h('circle', { cx: '10', cy: '16', r: '1' }),
+    ], { strokeWidth: '1.6' }),
+  trash: () =>
+    strokeIcon([
+      h('polyline', { points: '3 6 5 6 21 6' }),
+      h('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }),
+    ], { strokeWidth: '1.6' }),
+  cloud: () =>
+    strokeIcon([
+      h('path', { d: 'M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z' }),
+    ], { strokeWidth: '1.6' }),
+  loader: () =>
+    strokeIcon([
+      h('line', { x1: '12', y1: '2', x2: '12', y2: '6' }),
+      h('line', { x1: '12', y1: '18', x2: '12', y2: '22' }),
+      h('line', { x1: '4.93', y1: '4.93', x2: '7.76', y2: '7.76' }),
+      h('line', { x1: '16.24', y1: '16.24', x2: '19.07', y2: '19.07' }),
+      h('line', { x1: '2', y1: '12', x2: '6', y2: '12' }),
+      h('line', { x1: '18', y1: '12', x2: '22', y2: '12' }),
+      h('line', { x1: '4.93', y1: '19.07', x2: '7.76', y2: '16.24' }),
+      h('line', { x1: '16.24', y1: '7.76', x2: '19.07', y2: '4.93' }),
+    ], { strokeWidth: '1.6' }),
+  refresh: () =>
+    strokeIcon([
+      h('polyline', { points: '23 4 23 10 17 10' }),
+      h('polyline', { points: '1 20 1 14 7 14' }),
+      h('path', { d: 'M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15' }),
+    ], { strokeWidth: '1.6' }),
+  messageCircle: () =>
+    strokeIcon([
+      h('path', { d: 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z' }),
+    ], { strokeWidth: '1.6' }),
+  x: () =>
+    strokeIcon([
+      h('line', { x1: '18', y1: '6', x2: '6', y2: '18' }),
+      h('line', { x1: '6', y1: '6', x2: '18', y2: '18' }),
+    ], { strokeWidth: '1.6' }),
+  copy: () =>
+    strokeIcon([
+      h('rect', { x: '9', y: '9', width: '13', height: '13', rx: '2', ry: '2' }),
+      h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }),
+    ], { strokeWidth: '1.6' }),
+  volume: () =>
+    strokeIcon([
+      h('polygon', { points: '11 5 6 9 2 9 2 15 6 15 11 19 11 5' }),
+      h('path', { d: 'M15.54 8.46a5 5 0 0 1 0 7.07' }),
+      h('path', { d: 'M19.07 4.93a10 10 0 0 1 0 14.14' }),
+    ], { strokeWidth: '1.6' }),
+  smile: () =>
+    strokeIcon([
+      h('circle', { cx: '12', cy: '12', r: '10' }),
+      h('path', { d: 'M8 14s1.5 2 4 2 4-2 4-2' }),
+      h('line', { x1: '9', y1: '9', x2: '9.01', y2: '9' }),
+      h('line', { x1: '15', y1: '9', x2: '15.01', y2: '9' }),
     ], { strokeWidth: '1.6' }),
 };
 

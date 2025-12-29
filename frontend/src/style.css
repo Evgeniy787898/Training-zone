@@ -18,12 +18,8 @@
     /* DS-004: Darkened for WCAG AA (was #acacbe ~2.5:1, now ~5.5:1) */
     --color-text-inverse: #ffffff;
 
-    /* Accents */
-    --color-accent: #10a37f;
-    /* ChatGPT Green */
-    --color-accent-hover: #1a7f64;
-    --color-accent-contrast: #ffffff;
-    --color-accent-subtle: rgba(16, 163, 127, 0.1);
+    /* Accents - Set dynamically by JavaScript (appStore.initializeTheme) */
+    /* --color-accent, --color-accent-hover, --color-accent-contrast are all controlled by JS */
 
     /* Borders & Dividers */
     --color-border: #e5e5e5;
@@ -33,7 +29,7 @@
     /* Functional */
     --color-danger: #ef4146;
     --color-warning: #e5a000;
-    --color-success: #10a37f;
+    --color-success: var(--color-accent, #10a37f);
     --color-success-hover: #059669;
     /* DS-001: Success hover state */
     --color-success-light: rgba(16, 163, 127, 0.4);

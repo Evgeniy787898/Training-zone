@@ -24,6 +24,8 @@ import { createProgressRouter } from '../routes/progress.js';
 import { createProgressPhotosRouter } from '../routes/progressPhotos.js';
 import { createBodyScanRouter } from '../routes/bodyScan.js';
 import { createEvolutionRouter } from '../routes/evolution.js';
+import { createMusicRouter } from '../routes/music.js';
+import { createExerciseSetsRouter } from '../routes/exerciseSets.js';
 import analyticsRouter from '../routes/analytics.js';
 
 const PROGRAM_SCHEMA_ERROR_CODES = new Set(['P2021', 'P2022', 'P2010', 'P2003', 'P2000']);
@@ -180,6 +182,8 @@ export function setupRoutes(app: Express, prisma: any, services: ServiceContaine
     app.use('/api/progress-photos', createProgressPhotosRouter(services.progressPhotoService));
     app.use('/api/body-scan', createBodyScanRouter(services.bodyScanService));
     app.use('/api/evolution', createEvolutionRouter(services.evolutionService));
+    app.use('/api/music', createMusicRouter(prisma));
+    app.use('/api/exercise-sets', createExerciseSetsRouter(prisma));
 
     // Microservices proxy
     app.use(microservicesProxy);

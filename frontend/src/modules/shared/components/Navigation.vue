@@ -4,6 +4,18 @@
     aria-label="Основная навигация"
     role="navigation"
   >
+    <!-- AI Trainer Button centered on top edge -->
+    <button
+      type="button"
+      class="nav-ai-btn"
+      :class="{ 'nav-ai-btn--active': aiActive }"
+      @click="handleAiClick"
+      aria-label="Тренер"
+      title="Тренер"
+    >
+      <TrainerIcon :size="24" :variant="aiActive ? 'accent' : 'neutral'" />
+    </button>
+
     <div class="nav-buttons">
       <button
         v-for="tab in tabs"
@@ -45,21 +57,24 @@ import { prefetchPredictedRoute } from '@/features/core/prefetchResources';
 import { useProgressState } from '@/services/progressTracker';
 import { hapticSelection } from '@/utils/hapticFeedback';
 import AppIcon from './AppIcon.vue';
+import TrainerIcon from './TrainerIcon.vue';
 import type { IconName } from '../icons/registry';
 
 const { isActive: isLoading } = useProgressState();
 
 const emit = defineEmits<{
   'tab-change': [tabId: string];
+  'ai-click': [];
 }>();
 
 defineProps<{
   activeTab: string;
   variant?: 'bottom' | 'top';
+  aiActive?: boolean;
 }>();
 
 type TabDefinition = {
-  id: 'today' | 'exercises' | 'evolution' | 'history' | 'settings';
+  id: 'today' | 'exercises' | 'evolution' | 'settings';
   label: string;
   route: AppRouteSlug;
   icon: IconName;
@@ -85,12 +100,6 @@ const tabs: readonly TabDefinition[] = [
     icon: 'chart'
   },
   {
-    id: 'history',
-    label: 'История',
-    route: 'history',
-    icon: 'clock'
-  },
-  {
     id: 'settings',
     label: 'Настройки',
     route: 'settings',
@@ -104,13 +113,17 @@ const tabRouteMap: Record<TabId, AppRouteSlug> = {
   today: 'today',
   exercises: 'exercises',
   evolution: 'evolution',
-  history: 'history',
   settings: 'settings',
 };
 
 const handleTabClick = (tabId: string) => {
   hapticSelection();
   emit('tab-change', tabId);
+};
+
+const handleAiClick = () => {
+  hapticSelection();
+  emit('ai-click');
 };
 
 const handlePrefetch = (tabId: TabId) => {
@@ -259,6 +272,65 @@ const handlePrefetch = (tabId: TabId) => {
   .app-nav--bottom {
     position: sticky;
     bottom: var(--space-md);
+  }
+}
+
+/* AI Button - Centered on top edge */
+.nav-ai-btn {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 101;
+  box-shadow: 
+    0 2px 12px rgba(0, 0, 0, 0.15),
+    0 0 0 4px var(--color-bg-nav);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.nav-ai-btn:hover {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow: 
+    0 4px 20px color-mix(in srgb, var(--color-accent) 40%, transparent),
+    0 0 0 4px var(--color-bg-nav);
+}
+
+.nav-ai-btn:active {
+  transform: translate(-50%, -50%) scale(0.95);
+}
+
+.nav-ai-btn--active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+  animation: ai-pulse 2s ease-in-out infinite;
+}
+
+@keyframes ai-pulse {
+  0%, 100% {
+    box-shadow: 
+      0 2px 12px rgba(0, 0, 0, 0.15),
+      0 0 0 4px var(--color-bg-nav),
+      0 0 0 8px transparent;
+  }
+  50% {
+    box-shadow: 
+      0 4px 20px color-mix(in srgb, var(--color-accent) 40%, transparent),
+      0 0 0 4px var(--color-bg-nav),
+      0 0 0 12px color-mix(in srgb, var(--color-accent) 20%, transparent);
   }
 }
 </style>

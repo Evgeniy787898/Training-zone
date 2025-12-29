@@ -132,18 +132,93 @@ class GeminiAdviceProvider:
             raise ProviderAPIError.from_exception("gemini", exc) from exc
 
 
-def create_provider(kind: str, config: ProviderConfig, logger: logging.Logger) -> GeminiAdviceProvider:
-    """Create a Gemini provider instance.
+class OpenAIAdviceProvider:
+    """OpenAI LLM provider for AI advice generation.
     
-    Note: Only Gemini is supported. Other provider names are accepted for
-    backward compatibility but will raise an error.
+    Supports GPT-4.1-nano and other OpenAI models.
+    """
+    
+    name = "openai"
+
+    def __init__(self, config: ProviderConfig, logger: logging.Logger):
+        from openai import OpenAI
+        
+        self._client = OpenAI(api_key=config.api_key)
+        self._config = config
+        self._logger = logger
+
+    def generate(self, *, system_prompt: str, user_prompt: str) -> ProviderResult:
+        from openai import APIError, APIConnectionError, RateLimitError
+        
+        try:
+            response = self._client.chat.completions.create(
+                model=self._config.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=self._config.temperature,
+                max_tokens=self._config.max_output_tokens,
+            )
+            
+            # Extract text from response
+            text = response.choices[0].message.content or ""
+            
+            # Normalize usage
+            normalized_usage = None
+            if response.usage:
+                normalized_usage = ProviderUsage(
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    total_tokens=response.usage.total_tokens,
+                )
+            
+            return ProviderResult(text=text, usage=normalized_usage)
+            
+        except RateLimitError as exc:
+            raise ProviderAPIError(
+                provider="openai",
+                code="provider_rate_limited",
+                message=str(exc),
+                retryable=True,
+                status_code=429,
+            ) from exc
+        except APIConnectionError as exc:
+            raise ProviderAPIError(
+                provider="openai",
+                code="provider_network_error",
+                message=str(exc),
+                retryable=True,
+            ) from exc
+        except APIError as exc:
+            raise ProviderAPIError(
+                provider="openai",
+                code="provider_error",
+                message=str(exc),
+                status_code=getattr(exc, "status_code", None),
+                retryable=getattr(exc, "status_code", 500) >= 500,
+            ) from exc
+        except Exception as exc:
+            raise ProviderAPIError.from_exception("openai", exc) from exc
+
+
+def create_provider(kind: str, config: ProviderConfig, logger: logging.Logger):
+    """Create an AI provider instance.
+    
+    Supports:
+    - 'openai': OpenAI models (gpt-4.1-nano, gpt-4o-mini, etc.)
+    - 'gemini': Google Gemini models
     """
     normalized = kind.strip().lower()
-    if normalized in {"gemini", "google"}:
+    
+    if normalized == "openai":
+        return OpenAIAdviceProvider(config, logger)
+    elif normalized in {"gemini", "google"}:
         return GeminiAdviceProvider(config, logger)
+    
     raise ValueError(
         f"Unsupported AI provider: {kind}. "
-        "Only 'gemini' is supported. Set AI_ADVISOR_PROVIDER=gemini in .env"
+        "Supported: 'openai', 'gemini'. Set AI_ADVISOR_PROVIDER in .env"
     )
 
 
@@ -199,6 +274,7 @@ class ProviderWithFallback:
 
 __all__ = [
     "GeminiAdviceProvider",
+    "OpenAIAdviceProvider",
     "ProviderConfig",
     "ProviderAPIError",
     "ProviderResult",

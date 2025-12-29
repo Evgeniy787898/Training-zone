@@ -38,16 +38,16 @@
         <div class="measurements-grid">
           <div 
             v-for="field in measurementFields" 
-            :key="field.key"
+            :key="String(field.key)"
             class="form-group"
           >
-            <label class="form-label" :for="field.key">
+            <label class="form-label" :for="String(field.key)">
               {{ field.icon }} {{ field.label }}
             </label>
             <div class="input-with-unit">
               <input
-                :id="field.key"
-                v-model.number="formData[field.key]"
+                :id="String(field.key)"
+                v-model.number="formData[field.key as string]"
                 type="number"
                 step="0.5"
                 :min="field.min"
@@ -130,7 +130,7 @@ export interface BodyMeasurements {
   neck: number | null;
   notes: string;
   date: string;
-  [key: string]: number | null | string;
+  [key: string]: number | null | string | undefined;
 }
 
 interface MeasurementField {

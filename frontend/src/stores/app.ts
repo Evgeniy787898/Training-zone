@@ -12,8 +12,8 @@ import type {
     UserProgramSnapshot,
 } from '@/types';
 
-export type ThemeMode = 'dark';
-export type ThemePresetId = 'nocturne' | 'aurora';
+export type ThemeMode = 'dark' | 'light';
+export type ThemePresetId = 'nocturne' | 'aurora' | 'custom';
 
 export type ThemePreset = {
     id: ThemePresetId;
@@ -188,8 +188,29 @@ type ProgramContextSnapshot = {
 
 const PROGRAM_CONTEXT_REFRESH_INTERVAL = 30 * 1000;
 
+export interface ToastAction {
+    label: string;
+    onClick: () => void;
+}
+
+export interface Toast {
+    id: string;
+    title: string;
+    message?: string;
+    type: 'success' | 'error' | 'warning' | 'info';
+    traceId?: string;
+    duration?: number;
+    action?: ToastAction;
+    paused?: boolean;
+    createdAt: number;
+}
+
 export const useAppStore = defineStore('app', () => {
-    const toast = ref<{ title: string; message: string; type: 'success' | 'error' | 'warning' | 'info'; traceId?: string } | null>(null);
+    const toasts = ref<Toast[]>([]);
+
+    // Legacy support: toast ref returns the last toast or null
+    const toast = computed(() => toasts.value.length > 0 ? toasts.value[toasts.value.length - 1] : null);
+
     const telegramUser = ref<TelegramUser | null>(null);
     const profileSummary = ref<ProfileSummary | null>(null);
     const demoMode = ref(false);
@@ -200,12 +221,22 @@ export const useAppStore = defineStore('app', () => {
     const themePresetId = ref<ThemePresetId>('nocturne');
     const customThemePalette = ref<CustomThemePalette>(loadStoredPalette());
     const openAdviceModalFn = ref<(() => void) | null>(null);
-    let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    // Removed toastTimer as it sets timeout per toast now
     const appliedCssVariables = new Map<string, string>();
     const isFocusMode = ref(false);
+    const isTrainingMinimized = ref(false);
+    const trainingElapsedTime = ref(0);
 
     const toggleFocusMode = () => {
         isFocusMode.value = !isFocusMode.value;
+    };
+
+    const setTrainingMinimized = (minimized: boolean) => {
+        isTrainingMinimized.value = minimized;
+    };
+
+    const updateTrainingElapsedTime = (seconds: number) => {
+        trainingElapsedTime.value = seconds;
     };
 
     // Shared program context state
@@ -228,28 +259,50 @@ export const useAppStore = defineStore('app', () => {
     let lastLatencySampleToasted = 0;
     let lastLatencyAlertTimestamp: string | null = null;
 
-    const showToast = (data: { title: string; message: string; type: 'success' | 'error' | 'warning' | 'info'; traceId?: string }) => {
-        toast.value = data;
 
-        if (toastTimer !== null) {
-            clearTimeout(toastTimer);
+    const showToast = (data: {
+        title: string;
+        message?: string;
+        type?: 'success' | 'error' | 'warning' | 'info';
+        traceId?: string;
+        duration?: number;
+        action?: ToastAction;
+    }) => {
+        const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
+        const duration = data.duration ?? 5000;
+        const newToast: Toast = {
+            id,
+            title: data.title,
+            message: data.message,
+            type: data.type || 'info',
+            traceId: data.traceId,
+            duration,
+            action: data.action,
+            createdAt: Date.now(),
+        };
+
+        toasts.value.push(newToast);
+
+        if (duration > 0) {
+            setTimeout(() => {
+                removeToast(id);
+            }, duration);
         }
 
-        toastTimer = setTimeout(() => {
-            if (toast.value === data) {
-                toast.value = null;
-            }
-            toastTimer = null;
-        }, 5000);
+        return id;
     };
 
-    const clearToast = () => {
-        if (toastTimer !== null) {
-            clearTimeout(toastTimer);
-            toastTimer = null;
+    const removeToast = (id: string) => {
+        const index = toasts.value.findIndex(t => t.id === id);
+        if (index !== -1) {
+            toasts.value.splice(index, 1);
         }
-        toast.value = null;
     };
+
+    const clearToast = () => { // Renamed internally or kept for compat
+        toasts.value = [];
+    };
+
 
     const refreshProfile = async () => {
         try {
@@ -822,9 +875,14 @@ export const useAppStore = defineStore('app', () => {
         return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
     };
 
+    // WCAG contrast detection - determine black or white text for readability
+    // Threshold 0.179 recommended by WCAG 2.1 for AA compliance
+    // Colors below this luminance get white text, above get black text
     const pickContrastText = (bgColor: RgbColor) => {
         const luminance = getLuminance(bgColor);
-        return luminance > 0.5 ? '#000000' : '#ffffff';
+        // WCAG threshold: 0.179 is the midpoint for 4.5:1 contrast ratio
+        // Using slightly lower (0.179) ensures better readability on medium colors
+        return luminance > 0.179 ? '#000000' : '#ffffff';
     };
 
     const programCurrentLevels = computed(() => ({
@@ -956,6 +1014,8 @@ export const useAppStore = defineStore('app', () => {
         root.setAttribute('data-theme', preset.id);
         root.setAttribute('data-theme-mode', preset.mode);
         root.style.setProperty('color-scheme', preset.mode);
+
+
         const incomingKeys = new Set<string>();
 
         Object.entries(resolvedCssVars.value).forEach(([key, value]) => {
@@ -977,6 +1037,20 @@ export const useAppStore = defineStore('app', () => {
     const setThemePreset = (presetId: ThemePresetId, { persist = true } = {}) => {
         const preset = themePresets.find((item) => item.id === presetId) ?? themePresets[0];
         themePresetId.value = preset.id;
+
+        // Sync customThemePalette with preset's colors, preserving user's custom accent
+        const presetBg = hexToRgb(preset.cssVars['--color-bg'] ?? '#050505');
+        const presetTextPrimary = hexToRgb(preset.cssVars['--color-text-primary'] ?? '#f4f4f5');
+        const presetTextSecondary = hexToRgb(preset.cssVars['--color-text-secondary'] ?? '#cbd5f5');
+
+        customThemePalette.value = {
+            ...customThemePalette.value,
+            background: presetBg,
+            textPrimary: presetTextPrimary,
+            textSecondary: presetTextSecondary,
+            // Keep user's custom accent!
+        };
+
         applyThemePresetToDocument();
 
         if (typeof window !== 'undefined') {
@@ -1056,16 +1130,32 @@ export const useAppStore = defineStore('app', () => {
     const initializeTheme = () => {
         if (typeof window === 'undefined') return;
 
+        // FIRST: Load saved accent color into customThemePalette before applying any theme
+        // This ensures resolvedCssVars will have the correct accent when applyThemePresetToDocument runs
+        const savedPalette = window.localStorage.getItem(themeStorageKey);
+        if (savedPalette) {
+            try {
+                const parsed = JSON.parse(savedPalette) as CustomThemePalette;
+                if (parsed.accent && typeof parsed.accent.r === 'number') {
+                    // Update customThemePalette with saved accent
+                    customThemePalette.value = {
+                        ...customThemePalette.value,
+                        accent: parsed.accent,
+                    };
+                }
+            } catch (err) {
+                console.warn('Failed to parse saved palette for accent', err);
+            }
+        }
+
         // Try to load saved preset ID
         const savedPresetId = window.localStorage.getItem('tzona-ui-theme-id');
 
         if (savedPresetId === 'custom') {
-            // Load custom palette
+            // Load custom palette fully
             try {
-                const savedPalette = window.localStorage.getItem(themeStorageKey);
                 if (savedPalette) {
                     const parsed = JSON.parse(savedPalette);
-                    // Minimal validation could differ, but assuming valid structure
                     customThemePalette.value = parsed;
                     themePresetId.value = 'custom';
                     applyThemePresetToDocument();
@@ -1117,6 +1207,8 @@ export const useAppStore = defineStore('app', () => {
         programDefinition,
         programCurrentLevels,
         showToast,
+        removeToast,
+        toasts,
         clearToast,
         refreshProfile,
         refreshAssistantSessionState,
@@ -1137,5 +1229,9 @@ export const useAppStore = defineStore('app', () => {
         stopAssistantSessionMonitor,
         isFocusMode,
         toggleFocusMode,
+        isTrainingMinimized,
+        setTrainingMinimized,
+        trainingElapsedTime,
+        updateTrainingElapsedTime,
     };
 });

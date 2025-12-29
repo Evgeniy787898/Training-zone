@@ -97,6 +97,7 @@ const descriptionId = 'theme-sheet-description';
 
 const modeLabels: Record<ThemePreset['mode'], string> = {
   dark: 'Тёмная палитра',
+  light: 'Светлая палитра',
 };
 
 const handleClose = () => {

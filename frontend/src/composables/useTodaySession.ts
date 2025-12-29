@@ -25,6 +25,8 @@ export function useTodaySession() {
     const { state: programExercises, sync: syncProgramExercises } = createStableShallowRef<ProgramExerciseType[]>([]);
     const { state: session, sync: syncSession } = createStableShallowRef<TrainingSession | null>(null);
     const sessionSource = ref<string | null>(null);
+    const initialLoadComplete = ref(false);
+    const programContextReady = ref(false);
 
     const memoizedExtractProgramPlan = memoizeOne(extractProgramPlan);
 
@@ -196,7 +198,7 @@ export function useTodaySession() {
             const exercise = exercisesByKey.value.get(exerciseKey) as ProgramExerciseType | undefined;
             const levels = exerciseLevels.value.get(exerciseKey) ?? [];
             const levelReference = planExercise.level ?? resolveLevelReference(exerciseKey);
-            const level = pickLevel(levels, levelReference);
+            const level = pickLevel(levels, levelReference ?? undefined);
 
             const exerciseTitle = exercise ? (exercise as ProgramExerciseType).title : undefined;
             const hasPlanDetails = Boolean(planExercise.level || planExercise.levelLabel || planExercise.sets || planExercise.reps);
@@ -225,6 +227,8 @@ export function useTodaySession() {
 
             cards.push({
                 key: exerciseKey,
+                exerciseTitle: exerciseTitle || planExercise.name || undefined,
+                levelTitle: level?.title || level?.name || undefined,
                 levelLabel: String(levelLabel),
                 sets,
                 reps,
@@ -232,6 +236,7 @@ export function useTodaySession() {
                 levelCode: level ? String(level.level) : undefined,
                 levelId: level?.id,
                 tierLabel,
+                iconUrl: exercise?.iconUrl ?? null, // Parent exercise icon for stepper
             });
         });
 
@@ -263,6 +268,7 @@ export function useTodaySession() {
             }
         } finally {
             loading.value = false;
+            initialLoadComplete.value = true;
         }
     };
 
@@ -331,9 +337,11 @@ export function useTodaySession() {
     console.log('[useTodaySession] Starting initialization...');
     try {
         syncProgramFromStore();
+        programContextReady.value = true;
         console.log('[useTodaySession] syncProgramFromStore success, hasProgram:', Boolean(userProgram.value?.program?.id));
     } catch (err: any) {
         console.error('[useTodaySession] Failed to sync program from store:', err);
+        programContextReady.value = true; // Still mark as ready even on error
         error.value = err;
         loading.value = false; // CRITICAL: Set loading to false on error!
     }
@@ -360,6 +368,8 @@ export function useTodaySession() {
     return {
         selectedDate,
         loading,
+        initialLoadComplete,
+        programContextReady,
         error,
         session,
         sessionSource,

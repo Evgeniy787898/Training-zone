@@ -184,17 +184,15 @@ const onCardMouseLeave = (exercise: ProgramExercise) => {
 
 .exercises-container--visible {
   opacity: 1;
-  transform: translateY(0) scale(1);
 }
 
 .exercises-list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-sm);
+  gap: 16px;
   width: 100%;
   position: relative;
-  isolation: isolate;
-  padding: 0 var(--space-2xs) var(--space-xl);
+  padding: 12px 8px var(--space-xl);
 }
 
 /* Scrollable Container */
@@ -205,8 +203,6 @@ const onCardMouseLeave = (exercise: ProgramExercise) => {
   scrollbar-width: thin;
   scrollbar-color: var(--scroll-thumb-color-active, rgba(32, 33, 35, 0.35)) transparent;
   scroll-behavior: smooth;
-  will-change: scroll-position;
-  contain: layout style;
 }
 
 .exercises-list--scrollable::-webkit-scrollbar {

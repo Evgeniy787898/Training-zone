@@ -50,4 +50,19 @@ export interface AiAdvisorPersonalization {
     stats?: AiAdvisorPersonalizationStats;
     achievements?: AiAdvisorPersonalizationAchievements;
     readiness?: AiAdvisorPersonalizationReadiness;
+    aiSummary?: {
+        totalWorkouts: number;
+        currentStreak: number;
+        bestStreak: number;
+        weeklyAverage: number;
+        monthlyWorkouts: number;
+        trainingDays: string[];
+        level: 'beginner' | 'intermediate' | 'advanced';
+        notes: string[];
+        patterns: {
+            bestDay: string;
+            avgSessionMinutes: number;
+            preferredTime: string;
+        };
+    };
 }

@@ -13,6 +13,7 @@ import type {
     UpdateSessionPayload,
 } from '../../../types/api/shared.js';
 import { isStructuredNotes } from '../../../utils/typeGuards.js';
+import { emitWorkoutCompleted } from '../../../services/eventBus.js';
 
 export { isSessionsDataUnavailableError } from '../infrastructure/sessionRepository.js';
 
@@ -236,7 +237,21 @@ export class SessionService {
 
             const [hydrated] = await this.repository.hydrateSessions([updatedSession]);
             await invalidateSessionDerivedCaches(profileId);
-            return hydrated ?? updatedSession;
+            const finalSession = hydrated ?? updatedSession;
+
+            // Optional: Emit here if status changed to done? 
+            // Logic is usually in updateSession for updates. 
+            // But if saveSession updates an existing one, it handles it too.
+            if (finalSession.status === 'done' && existingSession.status !== 'done') {
+                const exerciseCount = finalSession.exercises?.length || 0;
+                const duration = finalSession.updatedAt && finalSession.createdAt
+                    ? (new Date(finalSession.updatedAt).getTime() - new Date(finalSession.createdAt).getTime()) / 1000
+                    : 1800;
+
+                emitWorkoutCompleted(finalSession.id, profileId, duration, exerciseCount);
+            }
+
+            return finalSession;
         }
 
         const sessionBase: any = {
@@ -257,7 +272,21 @@ export class SessionService {
 
         const [hydrated] = await this.repository.hydrateSessions([newSession]);
         await invalidateSessionDerivedCaches(profileId);
-        return hydrated ?? newSession;
+
+        const finalSession = hydrated ?? newSession;
+
+        // Emit workout:completed event if status is done
+        if (finalSession.status === 'done') {
+            const exerciseCount = finalSession.exercises?.length || 0;
+            // Estimate duration: (updatedAt - createdAt) in seconds, default to 30 mins
+            const duration = finalSession.updatedAt && finalSession.createdAt
+                ? (new Date(finalSession.updatedAt).getTime() - new Date(finalSession.createdAt).getTime()) / 1000
+                : 1800;
+
+            emitWorkoutCompleted(finalSession.id, profileId, duration, exerciseCount);
+        }
+
+        return finalSession;
     }
 
     /**
@@ -316,7 +345,23 @@ export class SessionService {
 
         const [hydrated] = await this.repository.hydrateSessions([updatedSession]);
         await invalidateSessionDerivedCaches(profileId);
-        return hydrated ?? updatedSession;
+
+        const finalSession = hydrated ?? updatedSession;
+
+        // Emit workout:completed event if status became 'done' (or just is done)
+        const wasDone = session.status === 'done';
+        const isDone = finalSession.status === 'done';
+
+        if (isDone && !wasDone) {
+            const exerciseCount = finalSession.exercises?.length || 0;
+            const duration = finalSession.updatedAt && finalSession.createdAt
+                ? (new Date(finalSession.updatedAt).getTime() - new Date(finalSession.createdAt).getTime()) / 1000
+                : 1800;
+
+            emitWorkoutCompleted(finalSession.id, profileId, duration, exerciseCount);
+        }
+
+        return finalSession;
     }
 
     /**

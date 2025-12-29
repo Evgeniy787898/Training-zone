@@ -612,7 +612,7 @@ onMounted(() => {
   left: 20%;
   right: 20%;
   height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent);
+  background: linear-gradient(90deg, transparent, var(--color-accent-light, rgba(59, 130, 246, 0.5)), transparent);
   opacity: 0;
   transition: opacity 0.3s ease;
 }
@@ -629,11 +629,11 @@ onMounted(() => {
 
 /* Active/Expanded state */
 .exercises-toggle-btn-main.active {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0.05) 100%);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: linear-gradient(135deg, var(--color-accent-light, rgba(59, 130, 246, 0.15)) 0%, color-mix(in srgb, var(--color-accent) 5%, transparent) 100%);
+  border-color: var(--color-accent-light, rgba(59, 130, 246, 0.4));
   color: #fff;
   box-shadow: 
-    0 0 20px rgba(59, 130, 246, 0.15),
+    0 0 20px var(--color-accent-light, rgba(59, 130, 246, 0.15)),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
   border-radius: 20px 20px 8px 8px;
 }
@@ -660,7 +660,7 @@ onMounted(() => {
 .exercises-toggle-btn-main.active :deep(svg),
 .exercises-toggle-btn-main.active svg {
   opacity: 1;
-  color: #3b82f6;
+  color: var(--color-accent);
 }
 
 .exercises-collapsible-wrapper {

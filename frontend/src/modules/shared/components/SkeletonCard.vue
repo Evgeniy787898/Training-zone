@@ -20,8 +20,8 @@ defineProps<{
 .skeleton-card__line {
   inline-size: 100%;
   block-size: 0.9rem;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-bg-tertiary, rgba(255, 255, 255, 0.08));
   opacity: 0.5;
   animation: skeleton-pulse 2s ease-in-out infinite;
 }

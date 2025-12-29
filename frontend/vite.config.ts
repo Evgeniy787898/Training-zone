@@ -124,16 +124,17 @@ export default defineConfig(({ mode }) => {
             port: 3000,
             host: '0.0.0.0', // Разрешить доступ с любого хоста
             allowedHosts: [
-                '.ngrok-free.dev', // Разрешить все ngrok хосты (free план)
-                '.ngrok.io', // Разрешить все ngrok.io хосты (на случай если используется другой план)
+                '.ngrok-free.dev', // ngrok free план
+                '.ngrok.io', // ngrok другие планы
+                '.trycloudflare.com', // Cloudflare Tunnel (бесплатно)
                 'localhost',
                 '127.0.0.1'
             ],
             headers: {
-                // Disable unsupported/legacy features to avoid WebView warnings
-                'Permissions-Policy': 'accelerometer=(), gyroscope=(), magnetometer=(), camera=(), microphone=()',
-                // Allow fonts from same origin and CDN
-                'Content-Security-Policy': "default-src 'self' https://telegram.org https://*.ngrok-free.dev https://*.ngrok.io; font-src 'self' data: https://fonts.gstatic.com https://*.ngrok-free.dev https://*.ngrok.io; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.ngrok-free.dev https://*.ngrok.io; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://telegram.org https://*.ngrok-free.dev https://*.ngrok.io; img-src 'self' data: https: blob:; connect-src 'self' https://telegram.org https://*.ngrok-free.dev https://*.ngrok.io wss://*.ngrok-free.dev wss://*.ngrok.io;"
+                // Allow microphone for voice input; disable other sensors not needed
+                'Permissions-Policy': 'accelerometer=(), gyroscope=(), magnetometer=(), camera=()',
+                // CSP with ngrok and cloudflare support
+                'Content-Security-Policy': "default-src 'self' https://telegram.org https://*.ngrok-free.dev https://*.ngrok.io https://*.trycloudflare.com https://*.supabase.co; font-src 'self' data: https://fonts.gstatic.com https://*.ngrok-free.dev https://*.ngrok.io https://*.trycloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.ngrok-free.dev https://*.ngrok.io https://*.trycloudflare.com; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://telegram.org https://*.ngrok-free.dev https://*.ngrok.io https://*.trycloudflare.com; img-src 'self' data: https: blob: https://*.supabase.co; connect-src 'self' https://telegram.org https://*.ngrok-free.dev https://*.ngrok.io https://*.trycloudflare.com https://*.supabase.co wss://*.ngrok-free.dev wss://*.ngrok.io wss://*.trycloudflare.com; media-src 'self' blob: data: https://*.ngrok-free.dev https://*.ngrok.io https://*.trycloudflare.com;"
             },
             proxy: {
                 '/api': {

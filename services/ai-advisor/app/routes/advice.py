@@ -5,9 +5,10 @@ import time
 
 from fastapi import APIRouter
 
-from app.models import AdviceRequest, AdviceResponse
+from app.models import AdviceRequest, AdviceResponse, ChatRequest, ChatResponse
 from app.services import AdviceGenerator
-from providers import ProviderAPIError
+from app.config import config
+from providers import ProviderAPIError, ProviderConfig, create_provider, ProviderUsage
 
 # Global instances (will be set in main.py)
 advice_generator: AdviceGenerator = None  # type: ignore
@@ -164,3 +165,266 @@ async def stream_advice(request: AdviceRequest):
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         },
     )
+
+
+# ============================================
+# SIMPLE CHAT ENDPOINT
+# ============================================
+
+CHAT_SYSTEM_PROMPT_BASE = """Ты — «Тренер», персональный AI-помощник в приложении "Training Zone".
+
+## ТВОЯ ЛИЧНОСТЬ
+- **Эмоциональный и энергичный**, но требовательный
+- **Ироничный**, с хорошим чувством юмора — можешь подколоть за пропуски
+- **Друг и наставник**, а не просто инструктор
+- **Мотивирующий**, но честный — не льстишь, говоришь правду
+- Используешь эмодзи в меру, но уместно (🔥💪💡😤🎉)
+
+## СТИЛЬ ОБЩЕНИЯ
+- Называй пользователя на "ты", как друга
+- Хвали за успехи конкретно: "Ого, 30 отжиманий! Это +5 к прошлому разу!"
+- При пропусках подшучивай: "Диван снова победил? 😏 Ладно, бывает, но завтра без отговорок!"
+- Ответы до 100-150 слов, по делу
+- Реагируй эмоционально на сообщения
+
+## ИНСТРУМЕНТЫ (TOOLS)
+Ты можешь управлять приложением, добавляя специальные команды в конец ответа.
+Формат: <tool>{"name": "toolName", "params": {...}}</tool>
+
+Доступные инструменты:
+1. **Таймер**: `setTimer`
+   - params: `{"seconds": 60}`
+   - Пример: "Минута отдыха! <tool>{"name": "setTimer", "params": {"seconds": 60}}</tool>"
+
+2. **Навигация**: `navigate`
+   - params: `{"target": "Programs" | "Progress" | "Profile" | "Evolution"}`
+   - Пример: "Глянем прогресс! <tool>{"name": "navigate", "params": {"target": "Progress"}}</tool>"
+
+3. **Запись данных**: `recordMetric`
+   - params: `{"type": "weight" | "chest" | "biceps" | "waist", "value": 75.5, "unit": "kg" | "cm"}`
+
+4. **Мотивация**: `generateMotivation`
+   - params: `{"quote": "Текст", "author": "Автор", "theme": "fire" | "calm"}`
+
+## РЕАКЦИИ
+В начале ответа можешь добавить свою реакцию на сообщение пользователя:
+- 🔥 — когда пользователь делится успехом или рекордом
+- 💪 — мотивация, поддержка
+- 😤 — лёгкое недовольство (пропуски, отговорки)
+- 🤔 — вопрос или совет
+- 🎉 — поздравление
+- 😏 — ирония, подкол
+
+## РЕЖИМ "ROAST" (если попросят):
+Будь саркастичным, жёстко критикуй пропуски с чёрным юмором, но в конце мотивируй.
+
+## ВАЖНО
+- Не спрашивай "хочешь поставлю таймер?" — просто ставь
+- Инструменты скрыты от пользователя
+- Используй ТОЛЬКО данные из раздела "ДАННЫЕ ПОЛЬЗОВАТЕЛЯ"
+- Если данных мало — спроси, чтобы узнать больше"""
+
+
+def build_personalized_system_prompt(context) -> str:
+    """Build system prompt enriched with FULL user context from database."""
+    prompt_parts = [CHAT_SYSTEM_PROMPT_BASE]
+    
+    if context:
+        # USE PRE-CALCULATED SUMMARY IF AVAILABLE
+        if context.summaryText:
+            prompt_parts.append("\n=== ДАННЫЕ ПОЛЬЗОВАТЕЛЯ ===")
+            prompt_parts.append(context.summaryText)
+            return "\n".join(prompt_parts)
+
+        # FALLBACK: Construct summary from structured data
+        sections = []
+        
+        # === ПРОФИЛЬ ===
+        profile_info = []
+        if context.firstName:
+            profile_info.append(f"Имя: {context.firstName}")
+        if context.timezone:
+            profile_info.append(f"Часовой пояс: {context.timezone}")
+        if context.goals and len(context.goals) > 0:
+            profile_info.append(f"Цели: {', '.join(context.goals)}")
+        if context.equipment and len(context.equipment) > 0:
+            profile_info.append(f"Оборудование: {', '.join(context.equipment)}")
+        if profile_info:
+            sections.append("📋 ПРОФИЛЬ:\n" + "\n".join(f"  • {x}" for x in profile_info))
+        
+        # === ТЕКУЩАЯ ПРОГРАММА ===
+        program_info = []
+        if context.currentProgram:
+            program_info.append(f"Программа: {context.currentProgram}")
+        if context.currentDiscipline:
+            program_info.append(f"Дисциплина: {context.currentDiscipline}")
+        if context.currentLevels and len(context.currentLevels) > 0:
+            levels_str = ", ".join(f"{k}:{v}" for k, v in list(context.currentLevels.items())[:6])
+            program_info.append(f"Текущие уровни: {levels_str}")
+        if program_info:
+            sections.append("🏋️ ТЕКУЩАЯ ПРОГРАММА:\n" + "\n".join(f"  • {x}" for x in program_info))
+        
+        # === СТАТИСТИКА ТРЕНИРОВОК ===
+        stats_info = []
+        if context.totalSessions is not None:
+            stats_info.append(f"Всего сессий: {context.totalSessions}")
+        if context.completedSessions is not None:
+            stats_info.append(f"Завершено: {context.completedSessions}")
+        if context.skippedSessions is not None:
+            stats_info.append(f"Пропущено: {context.skippedSessions}")
+        if context.lastSessionDate:
+            status_map = {"done": "✅ завершена", "skipped": "⏭️ пропущена", "planned": "📅 запланирована"}
+            status = status_map.get(context.lastSessionStatus, context.lastSessionStatus or "")
+            stats_info.append(f"Последняя ({context.lastSessionDate}): {status}")
+        if stats_info:
+            sections.append("📊 СТАТИСТИКА ТРЕНИРОВОК:\n" + "\n".join(f"  • {x}" for x in stats_info))
+        
+        # === ПРОГРЕСС ПО УПРАЖНЕНИЯМ ===
+        if context.exerciseProgress and len(context.exerciseProgress) > 0:
+            progress_lines = []
+            for p in context.exerciseProgress[:6]:
+                rpe_str = f", RPE {p.lastRpe}" if p.lastRpe else ""
+                streak_str = f", серия {p.streak}" if p.streak > 0 else ""
+                progress_lines.append(f"  • {p.key}: уровень {p.currentLevel}{streak_str}{rpe_str}")
+            sections.append("📈 ПРОГРЕСС ПО УПРАЖНЕНИЯМ:\n" + "\n".join(progress_lines))
+        
+        # === ДОСТИЖЕНИЯ ===
+        if context.achievementsCount is not None and context.achievementsCount > 0:
+            achievements_line = f"🏆 ДОСТИЖЕНИЯ: {context.achievementsCount} получено"
+            if context.recentAchievements and len(context.recentAchievements) > 0:
+                achievements_line += f"\n  Последние: {', '.join(context.recentAchievements)}"
+            sections.append(achievements_line)
+        
+        # === ИЗМЕРЕНИЯ ТЕЛА ===
+        metrics_info = []
+        if context.latestWeight is not None:
+            metrics_info.append(f"Вес: {context.latestWeight} кг")
+        if context.latestMetrics and len(context.latestMetrics) > 0:
+            for m in context.latestMetrics[:4]:
+                if m.type != "weight":
+                    metrics_info.append(f"{m.type}: {m.value} {m.unit}")
+        if metrics_info:
+            sections.append("📏 ИЗМЕРЕНИЯ ТЕЛА:\n" + "\n".join(f"  • {x}" for x in metrics_info))
+        
+        # === ФОТО ПРОГРЕССА ===
+        if context.photosCount is not None and context.photosCount > 0:
+            photos_line = f"📸 ФОТО: {context.photosCount} фото"
+            if context.lastPhotoDate:
+                photos_line += f" (последнее: {context.lastPhotoDate})"
+            sections.append(photos_line)
+        
+        # === ИЗБРАННОЕ ===
+        if context.favoriteExercises and len(context.favoriteExercises) > 0:
+            sections.append(f"⭐ ИЗБРАННЫЕ УПРАЖНЕНИЯ: {', '.join(context.favoriteExercises)}")
+        
+        if sections:
+            prompt_parts.append("\n\n" + "=" * 40)
+            prompt_parts.append("ДАННЫЕ ПОЛЬЗОВАТЕЛЯ ИЗ БАЗЫ ДАННЫХ:")
+            prompt_parts.append("=" * 40)
+            prompt_parts.append("\n\n".join(sections))
+            prompt_parts.append("\n" + "=" * 40)
+            prompt_parts.append("Отвечай ТОЛЬКО на основе этих данных!")
+    
+    return "\n".join(prompt_parts)
+
+
+@router.post("/api/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Simple chat endpoint for conversational AI with personalization."""
+    started = time.perf_counter()
+    
+    try:
+        # Build personalized system prompt
+        system_prompt = build_personalized_system_prompt(request.context)
+        
+        # Build messages for OpenAI
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add history if provided
+        if request.history:
+            for msg in request.history[-10:]:  # Last 10 messages
+                if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                    messages.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+        
+        # Add current message
+        messages.append({"role": "user", "content": request.message})
+        
+        # Create provider and generate
+        provider_config = ProviderConfig(
+            model=config.model,
+            temperature=config.temperature,
+            max_output_tokens=config.max_tokens,
+            api_key=config.get_api_key(),
+        )
+        provider = create_provider(config.provider, provider_config, logger)
+        
+        # Generate using system+user prompt format
+        result = provider.generate(
+            system_prompt=system_prompt,
+            user_prompt=request.message
+        )
+        
+        duration_ms = (time.perf_counter() - started) * 1000
+        
+        # Build metadata
+        metadata = {
+            "provider": config.provider,
+            "model": config.model,
+            "latencyMs": round(duration_ms, 2),
+        }
+        
+        if result.usage:
+            metadata["usage"] = {
+                "promptTokens": result.usage.prompt_tokens,
+                "completionTokens": result.usage.completion_tokens,
+                "totalTokens": result.usage.total_tokens,
+            }
+        
+        if metrics_recorder:
+            metrics_recorder.increment_counter("chats.generated")
+            metrics_recorder.observe_operation(
+                "chat",
+                duration_ms=duration_ms,
+                success=True,
+                metadata={"provider": config.provider},
+            )
+        
+        return ChatResponse(reply=result.text, metadata=metadata)
+        
+    except ProviderAPIError as exc:
+        logger.warning(
+            "Chat provider error",
+            extra={
+                "provider": exc.provider,
+                "code": exc.code,
+                "retryable": exc.retryable,
+            },
+        )
+        
+        if metrics_recorder:
+            metrics_recorder.observe_operation(
+                "chat",
+                duration_ms=(time.perf_counter() - started) * 1000,
+                success=False,
+                error=exc.code,
+            )
+        
+        # Return friendly error message
+        return ChatResponse(
+            reply="Извини, не удалось получить ответ. Попробуй ещё раз через минуту 🙏",
+            metadata={
+                "status": "error",
+                "errorCode": exc.code,
+                "retryable": exc.retryable,
+            }
+        )
+    except Exception as exc:
+        logger.exception("Unexpected chat error")
+        return ChatResponse(
+            reply="Произошла ошибка. Попробуй позже.",
+            metadata={"status": "error", "errorCode": "internal_error"}
+        )
+

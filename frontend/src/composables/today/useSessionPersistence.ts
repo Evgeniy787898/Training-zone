@@ -185,10 +185,28 @@ export function useSessionPersistence(options: SessionPersistenceOptions) {
         debouncedPersistUserState();
     });
 
+    const clearPersistedState = () => {
+        if (typeof window === 'undefined') return;
+        try {
+            window.localStorage.removeItem(storageKey.value);
+            // Reset to defaults
+            trainingStarted.value = false;
+            trainingCompleted.value = false;
+            activeStage.value = 'workout';
+            summaryComment.value = '';
+            exerciseResults.value = {};
+            tabataElapsed.value = 0;
+            console.log('[SessionPersistence] Cleared persisted state for', storageKey.value);
+        } catch (err) {
+            console.warn('Unable to clear persisted training state', err);
+        }
+    };
+
     return {
         loadPersistedState,
         persistUserState,
         debouncedPersistUserState,
+        clearPersistedState,
         savePersistedState: ({ immediate = false } = {}) => {
             if (immediate) {
                 persistUserState();

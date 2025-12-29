@@ -33,18 +33,20 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, defineAsyncComponent } from 'vue';
+import { defineComponent, defineAsyncComponent, type PropType } from 'vue';
+import type { ExerciseCard } from '@/types/today';
+import type { Suggestion } from '@/modules/today/components/SessionControls.vue';
 
 export default defineComponent({
   name: 'TodayResultsPanel',
   props: {
     isLocked: { type: Boolean, required: true },
-    exerciseCards: { type: Array, required: true },
-    exerciseResults: { type: Object, required: true },
+    exerciseCards: { type: Array as PropType<ExerciseCard[]>, required: true },
+    exerciseResults: { type: Object as PropType<Record<string, number>>, required: true },
     summaryComment: { type: String, required: true },
     saving: { type: Boolean, required: true },
-    postWorkoutSuggestions: { type: Array, required: true },
-    isSparkActive: { type: Function, required: true },
+    postWorkoutSuggestions: { type: Array as PropType<Suggestion[]>, required: true },
+    isSparkActive: { type: Function as PropType<(key: string) => boolean>, required: true },
   },
   emits: [
     'update:exerciseResults',

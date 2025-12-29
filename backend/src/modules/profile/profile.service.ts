@@ -1,6 +1,6 @@
 import type { Profile } from '@prisma/client';
 import type { ProfileRepository } from './profile.repository.js';
-import type { AuditService } from '../modules/security/audit.service.js';
+import type { AuditService } from '../security/audit.service.js';
 
 export class ProfileService {
     constructor(

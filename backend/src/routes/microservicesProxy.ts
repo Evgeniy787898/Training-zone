@@ -62,28 +62,30 @@ const dynamicProxy = createProxyMiddleware({
         // If undefined is returned, it falls back to 'target', which is localhost:3000 -> 404 likely
         return 'http://localhost:3000';
     },
-    onError: (err: Error, req: any, res: any) => {
-        console.error(`[Proxy] Error:`, err.message);
-        if (!res.headersSent) {
-            (res as Response).status(503).json({
-                error: 'service_unavailable',
-                message: `Service is not available`,
-                code: 'microservice_unavailable',
-            });
-        }
-    },
-    onProxyReq: (proxyReq: any, req: any) => {
-        const headersToForward = ['x-trace-id', 'authorization', 'x-profile-id', 'x-csrf-token'];
-        headersToForward.forEach((headerName) => {
-            const headerValue = (req as Request).headers[headerName];
-            if (headerValue) {
-                proxyReq.setHeader(headerName, headerValue as string);
+    on: {
+        error: (err: Error, req: any, res: any) => {
+            console.error(`[Proxy] Error:`, err.message);
+            if (!res.headersSent) {
+                (res as Response).status(503).json({
+                    error: 'service_unavailable',
+                    message: `Service is not available`,
+                    code: 'microservice_unavailable',
+                });
             }
-        });
-    },
-    onProxyRes: (proxyRes: any, req: any, res: any) => {
-        // Optional: Log proxy response
-        // console.debug(`[Proxy] Response status: ${proxyRes.statusCode}`);
+        },
+        proxyReq: (proxyReq: any, req: any) => {
+            const headersToForward = ['x-trace-id', 'authorization', 'x-profile-id', 'x-csrf-token'];
+            headersToForward.forEach((headerName) => {
+                const headerValue = (req as Request).headers[headerName];
+                if (headerValue) {
+                    proxyReq.setHeader(headerName, headerValue as string);
+                }
+            });
+        },
+        proxyRes: (proxyRes: any, req: any, res: any) => {
+            // Optional: Log proxy response
+            // console.debug(`[Proxy] Response status: ${proxyRes.statusCode}`);
+        },
     },
 });
 

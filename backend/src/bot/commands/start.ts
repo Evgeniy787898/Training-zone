@@ -31,7 +31,8 @@ interface StartCommandDeps {
  * Main menu inline keyboard
  */
 const createMainMenuKeyboard = (webAppUrl?: string) => {
-    const buttons = [
+    type ButtonType = ReturnType<typeof Markup.button.callback> | ReturnType<typeof Markup.button.webApp>;
+    const buttons: ButtonType[][] = [
         [
             Markup.button.callback(`${emoji.calendar} Сегодня`, 'sec_training'),
             Markup.button.callback(`${emoji.brain} AI`, 'sec_ai'),

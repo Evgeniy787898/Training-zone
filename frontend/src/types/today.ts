@@ -23,7 +23,9 @@ export type ProgramDay = {
 
 export type ExerciseCard = {
     key: string;
-    levelLabel: string;
+    exerciseTitle?: string;
+    levelTitle?: string;  // Actual name of the level (e.g. 'Колено к локтю')
+    levelLabel: string;   // Level number (e.g. 'Уровень 1.1')
     sets: number;
     reps: number;
     images: ExerciseImageSource[];
@@ -31,6 +33,7 @@ export type ExerciseCard = {
     levelCode?: string;
     levelId?: string;
     tierLabel?: string | null;
+    iconUrl?: string | null; // Parent exercise icon URL
 };
 
 export type MissingExercise = {

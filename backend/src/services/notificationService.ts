@@ -30,36 +30,16 @@ export class NotificationService {
     }
 
     public startScheduler() {
-        if (this.checkInterval) {
-            logger.warn('Notification scheduler already running');
-            return;
-        }
-
-        logger.info('Starting notification scheduler...');
-
-        // Calculate time to next minute for synchronization
-        const now = new Date();
-        const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
-
-        setTimeout(() => {
-            this.runCheck();
-            this.checkInterval = setInterval(() => {
-                this.runCheck();
-            }, 60000);
-        }, msToNextMinute);
-
         // Subscribe to workout:completed events
         this.subscribeToWorkoutCompletion();
+
+        // Legacy time-based scheduler is replaced by AI Scheduler (node-cron)
+        // We keep this method for subscription initialization only
+        logger.info('Notification Service initialized (AI Scheduler taking over cron jobs)');
     }
 
     public stopScheduler() {
-        if (this.checkInterval) {
-            clearInterval(this.checkInterval);
-            this.checkInterval = null;
-            logger.info('Notification scheduler stopped');
-        }
-
-        // Unsubscribe from workout:completed events
+        // Unsubscribe from events
         if (this.workoutCompletedUnsubscribe) {
             this.workoutCompletedUnsubscribe();
             this.workoutCompletedUnsubscribe = null;
@@ -77,11 +57,61 @@ export class NotificationService {
                     payload.duration,
                     payload.exerciseCount
                 );
+
+                // Check if this was the last scheduled workout of the week
+                await this.checkForWeeklyReport(payload.profileId);
             } catch (error) {
                 logger.error({ err: error }, 'Error sending workout completion notification');
             }
         });
         logger.info('Subscribed to workout:completed events');
+    }
+
+    /**
+     * Check if this completes the weekly workouts and send report
+     */
+    private async checkForWeeklyReport(profileId: string) {
+        try {
+            // Get this week's scheduled sessions
+            const now = new Date();
+            const dayOfWeek = now.getDay(); // 0 = Sunday
+            const daysUntilEndOfWeek = 7 - dayOfWeek;
+
+            // If it's Friday, Saturday or Sunday, check for weekly report
+            if (dayOfWeek >= 5 || dayOfWeek === 0) {
+                // Count completed sessions this week
+                const weekStart = new Date();
+                weekStart.setDate(now.getDate() - now.getDay()); // Start of week (Sunday)
+                weekStart.setHours(0, 0, 0, 0);
+
+                const completedThisWeek = await this.db.trainingSession.count({
+                    where: {
+                        profileId,
+                        status: 'done',
+                        updatedAt: { gte: weekStart }
+                    }
+                });
+
+                // Check if there are any remaining scheduled sessions this week
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 7);
+
+                const remainingPlanned = await this.db.trainingSession.count({
+                    where: {
+                        profileId,
+                        status: 'planned',
+                        plannedAt: { gte: now, lt: weekEnd }
+                    }
+                });
+
+                // If no more planned sessions and at least 1 completed, send report
+                if (remainingPlanned === 0 && completedThisWeek >= 1) {
+                    await this.sendWeeklyReport(profileId);
+                }
+            }
+        } catch (error) {
+            logger.error({ err: error }, '[AI Trainer] Error checking for weekly report');
+        }
     }
 
     /**
@@ -216,6 +246,177 @@ export class NotificationService {
             logger.info(`Notification sent to ${telegramId}`);
         } catch (error) {
             logger.error({ err: error }, `Failed to send notification to ${telegramId}`);
+        }
+    }
+
+    // ====== AI TRAINER NOTIFICATIONS ======
+
+    /**
+     * Send AI Trainer notification via Telegram
+     * Types: training_reminder, motivation, achievement, weekly_report, daily_tip
+     */
+    public async sendTrainerNotification(
+        profileId: string,
+        type: 'training_reminder' | 'motivation' | 'achievement' | 'weekly_report' | 'daily_tip',
+        params: { title: string; message: string; data?: any }
+    ) {
+        try {
+            const profile = await this.db.profile.findUnique({
+                where: { id: profileId },
+                select: { telegramId: true, notificationsPaused: true, firstName: true }
+            });
+
+            if (!profile?.telegramId || profile.notificationsPaused) {
+                return;
+            }
+
+            // Check daily notification limit (max 5)
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const todayCount = await this.db.notification.count({
+                where: {
+                    profileId,
+                    createdAt: { gte: today }
+                }
+            });
+
+            if (todayCount >= 5) {
+                logger.debug(`Daily notification limit reached for ${profileId}`);
+                return;
+            }
+
+            // Save to DB
+            await this.db.notification.create({
+                data: {
+                    profileId,
+                    type,
+                    title: params.title,
+                    message: params.message,
+                    data: params.data || {},
+                }
+            });
+
+            const fullMessage =
+                `${params.title}\n\n${params.message}`;
+
+            await this.bot.telegram.sendMessage(Number(profile.telegramId), fullMessage, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '📱 Открыть приложение', url: process.env.WEBAPP_URL || 'https://t.me/TrainingZoneBot' }
+                    ]]
+                }
+            });
+
+            logger.info(`[AI Trainer] Sent ${type} notification to profile ${profileId}`);
+        } catch (error) {
+            logger.error({ err: error }, `[AI Trainer] Failed to send ${type} notification`);
+        }
+    }
+
+    /**
+     * Check for inactive profiles and send motivation
+     * Called daily or on schedule
+     */
+    public async checkInactiveProfiles(daysThreshold: number = 2) {
+        try {
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - daysThreshold);
+
+            // Find profiles with no recent completed sessions
+            const inactiveProfiles = await this.db.profile.findMany({
+                where: {
+                    notificationsPaused: false,
+                    sessions: {
+                        none: {
+                            status: 'done',
+                            updatedAt: { gte: cutoffDate }
+                        }
+                    }
+                },
+                select: { id: true, firstName: true, telegramId: true }
+            });
+
+            for (const profile of inactiveProfiles) {
+                if (!profile.telegramId) continue;
+
+                const messages = [
+                    `Эй, ${profile.firstName || 'чемпион'}! Уже ${daysThreshold} дня без тренировки. Давай хотя бы разомнёмся? 🏃`,
+                    `${profile.firstName || 'Друг'}, диван — это хорошо, но мышцы скучают! 💪 Когда вернёшься?`,
+                    `Я тут один грустить за тебя тренируюсь... ${profile.firstName || ''}, где ты? 😏`,
+                ];
+                const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+
+                await this.sendTrainerNotification(profile.id, 'motivation', {
+                    title: '🏃 Скучаю по тебе!',
+                    message: randomMessage,
+                });
+            }
+
+            logger.info(`[AI Trainer] Checked ${inactiveProfiles.length} inactive profiles`);
+        } catch (error) {
+            logger.error({ err: error }, '[AI Trainer] Error checking inactive profiles');
+        }
+    }
+
+    /**
+     * Send weekly report after last workout of the week
+     */
+    public async sendWeeklyReport(profileId: string) {
+        try {
+            const profile = await this.db.profile.findUnique({
+                where: { id: profileId },
+                select: { telegramId: true, notificationsPaused: true, firstName: true }
+            });
+
+            if (!profile?.telegramId || profile.notificationsPaused) return;
+
+            // Calculate weekly stats
+            const weekStart = new Date();
+            weekStart.setDate(weekStart.getDate() - 7);
+
+            const sessions = await this.db.trainingSession.findMany({
+                where: {
+                    profileId,
+                    updatedAt: { gte: weekStart },
+                    status: 'done'
+                },
+                select: {
+                    createdAt: true,
+                    updatedAt: true,
+                }
+            });
+
+            const workoutCount = sessions.length;
+            // Estimate duration from createdAt to updatedAt
+            const totalDuration = sessions.reduce((sum: number, s) => {
+                if (s.createdAt && s.updatedAt) {
+                    const duration = (s.updatedAt.getTime() - s.createdAt.getTime()) / 1000;
+                    // Cap at 3 hours max per session to avoid outliers
+                    return sum + Math.min(duration, 3 * 60 * 60);
+                }
+                return sum;
+            }, 0);
+
+            const durationText = formatDuration(Math.round(totalDuration));
+
+            const message =
+                `📊 <b>Твоя неделя завершена!</b>\n\n` +
+                `💪 Тренировок: <b>${workoutCount}</b>\n` +
+                `⏱ Общее время: <b>${durationText}</b>\n\n` +
+                (workoutCount >= 3
+                    ? `Отличный результат! Так держать! 🔥`
+                    : `Можешь лучше! На следующей неделе жду больше 💪`);
+
+            await this.sendTrainerNotification(profileId, 'weekly_report', {
+                title: '📊 Еженедельный отчёт',
+                message,
+                data: { workoutCount, totalDuration }
+            });
+
+        } catch (error) {
+            logger.error({ err: error }, '[AI Trainer] Error sending weekly report');
         }
     }
 }

@@ -34,7 +34,31 @@ export class EvolutionRepository {
         });
     }
 
+    // Upsert scan - create or update
+    async upsertScan(data: {
+        profileId: string;
+        scanType: string;
+        frameCount: number;
+    }): Promise<Evolution360Scan> {
+        return this.prisma.evolution360Scan.upsert({
+            where: {
+                profileId_scanType: {
+                    profileId: data.profileId,
+                    scanType: data.scanType
+                },
+            },
+            create: data,
+            update: { frameCount: data.frameCount },
+        });
+    }
+
     async createFrames(scanId: string, frames: Array<{ frameIndex: number; imageUrl: string }>): Promise<number> {
+        // First delete any existing frames for this scan
+        await this.prisma.evolution360Frame.deleteMany({
+            where: { scanId }
+        });
+
+        // Then create new frames
         const result = await this.prisma.evolution360Frame.createMany({
             data: frames.map(f => ({
                 scanId,

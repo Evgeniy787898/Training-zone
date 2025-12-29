@@ -61,9 +61,26 @@ export const bootstrap = async () => {
 
     initMotionPreferences();
     ensureCdnHints();
-    await Promise.all([initTelegramAuth(pinia), router.isReady()]);
+
+    // Don't block app mount on Telegram auth - let it run in background
+    // This is critical for mobile performance
+    initTelegramAuth(pinia).catch((e) => {
+        console.warn('[Telegram Auth] Background init failed:', e);
+    });
+
+    await router.isReady();
 
     app.mount('#app');
+
+    // Re-apply theme AFTER mount to ensure CSS vars take priority over any component CSS
+    // that was loaded during mounting
+    import('vue').then(({ nextTick }) => {
+        nextTick(() => {
+            appStore.initializeTheme();
+            console.log('[entry-client] Re-applied theme after mount');
+        });
+    });
+
     delete window.__PINIA_INITIAL_STATE__;
 
     scheduleAfterFirstPaint(() => {

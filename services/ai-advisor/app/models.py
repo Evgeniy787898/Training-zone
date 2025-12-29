@@ -89,3 +89,75 @@ class AdviceResponse(BaseModel):
     nextSteps: List[str]
     tips: List[str]
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ExerciseProgressItem(BaseModel):
+    """Progress for a single exercise."""
+    key: str
+    title: Optional[str] = None
+    currentLevel: str
+    streak: int = 0
+    lastRpe: Optional[float] = None
+
+
+class MetricItem(BaseModel):
+    """Body measurement."""
+    type: str
+    value: float
+    unit: str
+    date: str
+
+
+class ChatUserContext(BaseModel):
+    """Full user context for personalized chat responses."""
+    # Profile
+    firstName: Optional[str] = None
+    summaryText: Optional[str] = None  # Pre-formatted full context summary
+    goals: Optional[List[str]] = None
+    equipment: Optional[List[str]] = None
+    timezone: Optional[str] = None
+    
+    # Current Program
+    currentProgram: Optional[str] = None
+    currentDiscipline: Optional[str] = None
+    currentLevels: Optional[Dict[str, str]] = None  # {exerciseKey: level}
+    
+    # Sessions Statistics
+    totalSessions: Optional[int] = None
+    completedSessions: Optional[int] = None
+    skippedSessions: Optional[int] = None
+    lastSessionDate: Optional[str] = None
+    lastSessionStatus: Optional[str] = None
+    
+    # Exercise Progress
+    exerciseProgress: Optional[List[ExerciseProgressItem]] = None
+    
+    # Achievements
+    achievementsCount: Optional[int] = None
+    recentAchievements: Optional[List[str]] = None
+    
+    # Metrics
+    latestWeight: Optional[float] = None
+    latestMetrics: Optional[List[MetricItem]] = None
+    
+    # Photos
+    photosCount: Optional[int] = None
+    lastPhotoDate: Optional[str] = None
+    
+    # Favorites
+    favoriteExercises: Optional[List[str]] = None
+
+
+class ChatRequest(BaseModel):
+    """Simple chat request with user context."""
+    message: str
+    history: Optional[List[Dict[str, str]]] = None  # [{"role": "user/assistant", "content": "..."}]
+    profileId: Optional[str] = None
+    context: Optional[ChatUserContext] = None  # User personalization data
+
+
+class ChatResponse(BaseModel):
+    """Simple chat response."""
+    reply: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+

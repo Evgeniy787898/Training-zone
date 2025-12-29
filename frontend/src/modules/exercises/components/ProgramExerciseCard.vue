@@ -1,59 +1,65 @@
 <template>
-  <BaseCard
-    class="program-exercise-card"
-    :class="{ 'program-exercise-card--expanded': isExpanded }"
-    hoverable
+  <div
+    class="exercise-card"
+    :class="{ 'exercise-card--expanded': isExpanded }"
     :style="styles"
     @click="onClick"
     @mouseenter="onMouseEnter"
     @mousemove="onMouseMove"
     @mouseleave="onMouseLeave"
   >
-    <div 
-      class="program-exercise-icon"
-      :class="{ 'program-exercise-icon--has-image': exercise.iconUrl }"
-      @click.stop="onIconClick"
-    >
+    <!-- Primary image fills the card -->
+    <div class="exercise-card__image-wrapper">
       <img 
         v-if="exercise.iconUrl"
         :src="exercise.iconUrl"
         :alt="exercise.title"
-        class="program-exercise-icon__img"
+        class="exercise-card__image"
+        loading="lazy"
       />
-      <svg v-else width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
-        <path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-      </svg>
+      <div v-else class="exercise-card__placeholder">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
     </div>
     
-    <div class="program-exercise-content">
-      <div 
-        class="program-exercise-title text-fade-in" 
-        :style="{ '--delay': `${index * 50}ms` }"
-      >
-        {{ exercise.title }}
-      </div>
-      <div 
-        v-if="exercise.description" 
-        class="program-exercise-description text-fade-in" 
-        :style="{ '--delay': `${index * 50 + 100}ms` }"
-      >
-        {{ exercise.description }}
-      </div>
+    <!-- Title label at bottom -->
+    <div class="exercise-card__label">
+      <span class="exercise-card__title">{{ exercise.title }}</span>
     </div>
+    
+    <!-- Expand button (if has second image) -->
+    <button 
+      v-if="exercise.iconUrlHover" 
+      class="exercise-card__expand-btn"
+      @click.stop="onIconClick"
+      aria-label="Показать детали"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+      </svg>
+    </button>
 
+    <!-- Expanded state - shows secondary image -->
     <template v-if="isExpanded && exercise.iconUrlHover">
-      <div class="program-exercise-expanded-bg">
-        <img :src="exercise.iconUrlHover" alt="" class="program-exercise-expanded-bg__img"/>
+      <div class="exercise-card__expanded-overlay">
+        <img 
+          :src="exercise.iconUrlHover" 
+          :alt="exercise.title" 
+          class="exercise-card__expanded-image"
+        />
+        <div class="exercise-card__expanded-label">
+          <span>{{ exercise.title }}</span>
+        </div>
       </div>
-      <img :src="exercise.iconUrlHover" :alt="exercise.title" class="program-exercise-expanded-img"/>
     </template>
-  </BaseCard>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { type StyleValue } from 'vue';
-import BaseCard from '@/components/ui/BaseCard.vue';
 import type { ProgramExercise } from '@/types/exercises-page';
 
 const props = defineProps<{
@@ -93,192 +99,142 @@ const onMouseLeave = () => {
 </script>
 
 <style scoped>
-/* Card Styles */
-.program-exercise-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-xs);
-  padding: var(--space-sm);
-  background: linear-gradient(145deg, rgba(35, 35, 40, 0.95) 0%, rgba(25, 25, 30, 0.98) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 32px;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  cursor: pointer;
+/* Card container - NO transforms to prevent overlap */
+.exercise-card {
   position: relative;
-  z-index: 1;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  will-change: transform, box-shadow;
-  overflow: hidden;
   aspect-ratio: 1;
-  height: auto;
-  min-height: 0;
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #1a1a1f;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
-.program-exercise-card::before {
-  content: '';
+.exercise-card:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Image fills entire card */
+.exercise-card__image-wrapper {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border-radius: var(--radius-xl);
-  background: radial-gradient(circle at 50% 0%, var(--exercise-card-color, var(--color-accent)) 0%, transparent 70%);
-  opacity: 0;
-  transition: opacity 0.4s ease;
-  pointer-events: none;
-  z-index: -1;
-}
-
-.program-exercise-card:hover {
-  border-color: rgba(255, 255, 255, 0.3);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  transform: translateY(-6px) scale(1.02);
-  z-index: 10;
-}
-
-.program-exercise-card:hover::before {
-  opacity: 0.15;
-}
-
-.program-exercise-card:active {
-  transform: translateY(-3px) scale(1.01);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-}
-
-.program-exercise-icon {
-  margin: 0 auto;
-  margin-bottom: 8px;
-  width: 80px;
-  height: 80px;
-  min-width: 80px;
-  min-height: 80px;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #1a1a1f;
-  color: var(--exercise-card-color, var(--color-accent));
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.15);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  position: relative;
-  overflow: hidden;
+  background: linear-gradient(145deg, #1a1a1f 0%, #0f0f12 100%);
 }
 
-.program-exercise-card:hover .program-exercise-icon {
-  transform: scale(1.08);
-  border-color: var(--exercise-card-color, var(--color-accent));
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 20px var(--color-accent-light, rgba(16, 163, 127, 0.2)), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-}
-
-.program-exercise-icon__img {
+.exercise-card__image {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  background: #1a1a1f;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.program-exercise-icon--has-image {
-  background: #1a1a1f;
-  padding: 0;
-}
-
-.program-exercise-card:hover .program-exercise-icon--has-image .program-exercise-icon__img {
-  transform: scale(1.1);
-}
-
-.program-exercise-content {
-  width: 100%;
+.exercise-card__placeholder {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  text-align: center;
-  padding: 0 4px;
+  width: 100%;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.25);
 }
 
-.program-exercise-title {
-  font-family: var(--font-family-base, 'Inter', 'Roboto Flex', 'Google Sans', sans-serif);
-  font-size: clamp(0.9375rem, 2.8vw, 1.0625rem);
-  font-weight: 600;
-  color: var(--color-text-primary, #f4f4f5);
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-  transition: color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+/* Title overlay at bottom */
+.exercise-card__label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 24px 8px 8px;
+  background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.8) 60%, rgba(0, 0, 0, 0.95) 100%);
+  pointer-events: none;
 }
 
-.program-exercise-description {
-  font-family: var(--font-family-base, 'Inter', 'Roboto Flex', 'Google Sans', sans-serif);
-  font-size: clamp(0.75rem, 2.2vw, 0.875rem);
-  font-weight: 400;
-  color: var(--color-text-secondary, rgba(244, 244, 245, 0.7));
-  line-height: 1.45;
-  letter-spacing: 0.005em;
-  opacity: 0.85;
+.exercise-card__title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fff;
+  text-align: center;
+  line-height: 1.3;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
-/* Expanded State */
-.program-exercise-card--expanded {
-  z-index: 50 !important;
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent), 0 16px 48px rgba(0, 0, 0, 0.5);
-}
-
-.program-exercise-card--expanded .program-exercise-content,
-.program-exercise-card--expanded .program-exercise-icon {
+/* Expand button (top-right corner) */
+.exercise-card__expand-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
   opacity: 0;
-  pointer-events: none;
   transition: opacity 0.2s ease;
 }
 
-.program-exercise-expanded-img {
+.exercise-card:hover .exercise-card__expand-btn {
+  opacity: 1;
+}
+
+.exercise-card__expand-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+}
+
+/* Expanded state overlay */
+.exercise-card--expanded {
+  z-index: 10;
+  border-color: var(--color-accent, #10A37F);
+}
+
+.exercise-card__expanded-overlay {
   position: absolute;
   inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(145deg, #1a1a1f 0%, #0f0f12 100%);
+}
+
+.exercise-card__expanded-image {
   width: 100%;
   height: 100%;
-  z-index: 100;
   object-fit: contain;
-  background: transparent;
-  border-radius: inherit;
-  animation: expandIn 0.2s ease-out forwards;
 }
 
-.program-exercise-expanded-bg {
+.exercise-card__expanded-label {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 90;
-  overflow: hidden;
-  border-radius: inherit;
-  background: #000;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px;
+  background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.85) 100%);
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #fff;
 }
 
-.program-exercise-expanded-bg__img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: blur(20px) brightness(0.7);
-  transform: scale(1.2);
-  opacity: 0;
-  animation: fadeInBg 0.4s ease-out forwards;
-}
-
-@keyframes fadeInBg { from { opacity: 0; } to { opacity: 1; } }
-@keyframes expandIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
-@keyframes textFadeInStagger { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-
-.text-fade-in {
-  animation: textFadeInStagger 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
-  animation-delay: var(--delay, 0ms);
-  opacity: 0;
+/* Responsive */
+@media (min-width: 480px) {
+  .exercise-card {
+    border-radius: 20px;
+  }
+  
+  .exercise-card__title {
+    font-size: 0.8rem;
+  }
 }
 </style>

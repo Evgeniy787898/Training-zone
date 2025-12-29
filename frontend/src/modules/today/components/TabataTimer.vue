@@ -12,16 +12,6 @@
         <h4 class="tabata__title">Табата</h4>
         <span class="tabata__badge">{{ phaseLabel.text }}</span>
       </div>
-      <button
-        type="button"
-        class="tabata__focus-toggle"
-        :class="{ 'tabata__focus-toggle--active': focusMode }"
-        :aria-pressed="focusMode ? 'true' : 'false'"
-        :disabled="locked"
-        @click="emit('toggle-focus')"
-      >
-        {{ focusMode ? 'Выключить фокус' : 'Режим фокуса' }}
-      </button>
       <span class="tabata__round" :data-phase="phaseLabel.type">{{ currentRoundLabel }}</span>
     </header>
 

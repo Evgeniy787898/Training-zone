@@ -17,9 +17,10 @@
         "lint": "eslint \"src/**/*.{ts,tsx,vue}\""
     },
     "dependencies": {
+        "@supabase/supabase-js": "^2.87.1",
         "@tresjs/cientos": "^5.1.1",
         "@tresjs/core": "^5.1.1",
-        "@types/three": "^0.181.0",
+        "@types/markdown-it": "^14.1.2",
         "@vue/server-renderer": "^3.4.0",
         "@vueuse/core": "^10.7.0",
         "axios": "^1.6.2",
@@ -27,6 +28,7 @@
         "date-fns": "^3.0.0",
         "idb-keyval": "^6.2.2",
         "jszip": "^3.10.1",
+        "markdown-it": "^14.1.0",
         "pinia": "^2.1.7",
         "three": "^0.181.2",
         "vue": "^3.4.0",
@@ -39,6 +41,7 @@
         "@aws-sdk/client-cloudfront": "^3.496.0",
         "@aws-sdk/client-s3": "^3.496.0",
         "@playwright/test": "^1.57.0",
+        "@types/three": "^0.182.0",
         "@typescript-eslint/eslint-plugin": "^8.47.0",
         "@typescript-eslint/parser": "^8.47.0",
         "@vitejs/plugin-vue": "^5.0.0",

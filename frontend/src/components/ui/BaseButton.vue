@@ -21,13 +21,15 @@
       </svg>
     </span>
     
+    <!-- 
     <AppIcon 
       v-if="icon && !loading" 
       :name="icon" 
       class="base-button__icon"
       :class="{ 'mr-2': $slots.default }"
       :size="iconSize"
-    />
+    /> 
+    -->
     
     <span v-if="$slots.default" class="base-button__content" :class="{ 'opacity-0': loading && !loadingText }">
       <slot>{{ loadingText }}</slot>
@@ -38,8 +40,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
-import AppIcon from '@/modules/shared/components/AppIcon.vue';
-import type { IconName } from '@/modules/shared/icons/registry';
 
 const props = withDefaults(
   defineProps<{
@@ -50,7 +50,7 @@ const props = withDefaults(
     disabled?: boolean;
     loading?: boolean;
     loadingText?: string;
-    icon?: IconName;
+    icon?: string;
     to?: string | object;
   }>(),
   {
@@ -65,13 +65,7 @@ const props = withDefaults(
 
 const tag = computed(() => (props.to ? RouterLink : 'button'));
 
-const iconSize = computed(() => {
-  switch (props.size) {
-    case 'sm': return 16;
-    case 'lg': return 24;
-    default: return 20;
-  }
-});
+// iconSize computed removed - icon template block is commented out
 </script>
 
 <style scoped>

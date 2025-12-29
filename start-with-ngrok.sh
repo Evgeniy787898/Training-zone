@@ -219,8 +219,13 @@ validate_env() {
 validate_env
 
 # Overwrite/Set dynamic variables
+# Overwrite/Set dynamic variables
 export TELEGRAM_WEBAPP_URL="$NGROK_URL"
 export VITE_API_BASE_URL="$NGROK_URL/api"
+# Ensure backend picks up the dynamic URL
+export WEBAPP_URL="$NGROK_URL"
+export FRONTEND_URL="$NGROK_URL"
+
 export AI_ADVISOR_BASE_URL="http://localhost:3003"
 export ANALYTICS_BASE_URL="http://localhost:3004"
 export IMAGE_PROCESSOR_URL="http://localhost:3002"
@@ -230,9 +235,13 @@ export IMAGE_PROCESSOR_ENABLED="true"
 
 # Override DATABASE_URL to use Transaction Pooler (port 6543) to avoid "max clients reached"
 # Using the DATABASE_URL from .env but changing port 5432 -> 6543 for pgbouncer
-if [ -n "$DATABASE_URL" ]; then
-    export DATABASE_URL=$(echo "$DATABASE_URL" | sed 's/:5432/:6543/' | sed 's/$/?pgbouncer=true/')
-else
+# if [ -n "$DATABASE_URL" ]; then
+#     export DATABASE_URL=$(echo "$DATABASE_URL" | sed 's/:5432/:6543/' | sed 's/$/?pgbouncer=true/')
+# else
+#     echo -e "${RED}❌ DATABASE_URL not found in .env file${NC}"
+#     exit 1
+# fi
+if [ -z "$DATABASE_URL" ]; then
     echo -e "${RED}❌ DATABASE_URL not found in .env file${NC}"
     exit 1
 fi

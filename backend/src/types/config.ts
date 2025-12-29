@@ -173,6 +173,7 @@ export type BodySizeDefaults = Readonly<{
   formBytes: number;
   textBytes: number;
   binaryBytes: number;
+  multipartBytes: number;
 }>;
 
 export type RateLimitWindowConfig = Readonly<{
@@ -184,6 +185,11 @@ export type RateLimitConfig = Readonly<{
   memoryCleanupIntervalMs: number;
   global: RateLimitWindowConfig;
   pin: RateLimitWindowConfig;
+  assistant: Readonly<{
+    chat: RateLimitWindowConfig;
+    tts: RateLimitWindowConfig;
+    transcribe: RateLimitWindowConfig;
+  }>;
   bruteForce: Readonly<{
     maxAttempts: number;
     blockDurationMs: number;

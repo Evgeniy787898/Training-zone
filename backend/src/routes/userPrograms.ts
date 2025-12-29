@@ -351,5 +351,76 @@ export function createUserProgramsRouter(userProgramService: UserProgramService)
         }
     });
 
+    // PATCH /api/user-programs/progression - update single exercise level (for progression system)
+    const progressionUpdateSchema = z.object({
+        exerciseKey: z.string().min(1),
+        newLevel: z.number().int().min(1).max(10),
+        newTier: z.number().int().min(1).max(4),
+    });
+
+    router.patch('/progression', validateRequest({ body: progressionUpdateSchema }), async (req: Request, res: Response, next) => {
+        try {
+            const profileId = req.profileId;
+
+            if (!profileId) {
+                return respondAuthRequired(req, res);
+            }
+
+            const { exerciseKey, newLevel, newTier } = req.validated?.body as z.infer<typeof progressionUpdateSchema>;
+
+            const userProgram = await userProgramService.updateExerciseLevel(
+                profileId,
+                exerciseKey,
+                newLevel,
+                newTier,
+            );
+
+            if (!userProgram) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'not_found',
+                        message: 'User program not found',
+                        statusCode: 404,
+                        category: 'not_found',
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+
+            await invalidateExerciseCatalogCache(profileId);
+
+            return respondWithSuccess(
+                res,
+                {
+                    message: 'Exercise level updated',
+                    exerciseKey,
+                    newLevel: `${newLevel}.${newTier}`,
+                },
+                { meta: buildMeta(req) },
+            );
+        } catch (error) {
+            if (error instanceof z.ZodError) {
+                return respondWithAppError(
+                    res,
+                    new AppError({
+                        code: 'validation_failed',
+                        message: 'Некорректные данные',
+                        statusCode: 422,
+                        category: 'validation',
+                        details: error.issues,
+                        exposeDetails: true,
+                    }),
+                    { traceId: req.traceId },
+                );
+            }
+            if (isUserProgramSchemaError(error)) {
+                console.warn('[user-programs] Schema unavailable when updating progression:', error);
+                return respondUserProgramUnavailable(res, req.traceId);
+            }
+            next(error);
+        }
+    });
+
     return router;
 }

@@ -103,4 +103,41 @@ export class UserProgramService {
 
         return this.userProgramRepository.update(targetId, updateData);
     }
+
+    /**
+     * Update a single exercise's level in currentLevels
+     * Used for progression system to advance exercise tier/level
+     */
+    async updateExerciseLevel(
+        profileId: string,
+        exerciseKey: string,
+        newLevel: number,
+        newTier: number,
+    ) {
+        const existing = await this.userProgramRepository.findLatestByProfileId(profileId);
+        if (!existing) {
+            return null;
+        }
+
+        const target = Array.isArray(existing) ? existing[0] : existing;
+        const targetId = (target as any)?.id;
+        if (!target || typeof targetId !== 'string') return null;
+
+        // Get current levels object
+        const currentLevels = (target.currentLevels as Record<string, any>) ?? {};
+
+        // Update the specific exercise's level
+        // Store as object with level and tier, or as string "X.Y"
+        currentLevels[exerciseKey] = {
+            level: newLevel,
+            tier: newTier,
+            currentLevel: `${newLevel}.${newTier}`,
+            updatedAt: new Date().toISOString(),
+        };
+
+        return this.userProgramRepository.update(targetId, {
+            currentLevels,
+            updatedAt: new Date(),
+        });
+    }
 }

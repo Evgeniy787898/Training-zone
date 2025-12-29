@@ -129,11 +129,37 @@ export async function startTelegramBot(prisma: SafePrismaClient | null): Promise
 
     // Initialize Notification Service
     const notificationService = new NotificationService(bot, prisma as any);
-    notificationService.startScheduler();
+
+    // Start AI Scheduler (Cron Jobs)
+    const { initAIScheduler } = await import('../jobs/aiScheduler.js');
+    initAIScheduler(notificationService, prisma as any);
+
+    // Start legacy scheduler for explicit user notification times if needed
+    // notificationService.startScheduler(); 
+    // We replace it with AI Scheduler for now as per plan
+    notificationService.startScheduler(); // Keep existing one for 'workout:completed' subscription logic!
+
 
     // Launch
-    await bot.launch(() => {
+    await bot.launch(async () => {
         logger.info(`[bot] Telegram Bot ${bot?.botInfo?.username} started successfully.`);
+
+        // Automatically update the Menu Button to point to the current Web App URL
+        // This ensures that even if ngrok changes, the button works (after restart)
+        if (webAppUrl) {
+            try {
+                await bot?.telegram.setChatMenuButton({
+                    menuButton: {
+                        type: 'web_app',
+                        text: 'Open TZONA',
+                        web_app: { url: webAppUrl }
+                    }
+                });
+                logger.info(`[bot] ✅ Menu Button updated to: ${webAppUrl}`);
+            } catch (err) {
+                logger.warn(`[bot] ⚠️ Failed to update Menu Button: ${err}`);
+            }
+        }
     });
 
     // Controller for graceful stop

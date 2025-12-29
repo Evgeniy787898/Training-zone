@@ -182,6 +182,28 @@ export interface ExerciseLevelsResponse {
     items: ExerciseLevel[];
 }
 
+// Phase 6: Tier advancement types
+export interface TierTarget {
+    tier: number;              // 1, 2, 3
+    tierName: string;          // "Продвинутый", "Профессиональный", "Элитный"
+    sets: number;              // required sets for this tier
+    reps: number;              // required reps per set
+    levelCode: string;         // "1.2"
+    exerciseName?: string;     // "Колено к локтю"
+}
+
+export interface SetResult {
+    setIndex: number;
+    reps: number;
+}
+
+export interface OptionalSetOffer {
+    targetTier: number | 'next_level';
+    targetName: string;        // "Профессиональный" or exercise name
+    setsToAdd: number;
+    repsNeeded: number;        // reps per additional set
+}
+
 export interface ExerciseHistoryItem {
     id: string;
     sessionId: string;

@@ -130,7 +130,8 @@ export async function setupPrisma(config: EnvConfig): Promise<PrismaSetupResult>
     });
     appContainer.registerFactory(diTokens.sessionService, (container) => {
         const repository = container.resolve(diTokens.sessionRepository);
-        return new SessionService(repository);
+        const historyService = container.resolve(diTokens.historyService);
+        return new SessionService(repository, historyService);
     });
 
     return {

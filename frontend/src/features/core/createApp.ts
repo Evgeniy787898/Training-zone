@@ -2,7 +2,6 @@ import { createApp as createClientApp, createSSRApp, type App as VueApp } from '
 import { createPinia, type Pinia } from 'pinia';
 import App from '@/App.vue';
 import { createAppRouter } from '@/router';
-import Tres from '@tresjs/core';
 import '@/style.css';
 
 type CreateAppResult = {
@@ -22,7 +21,24 @@ export const createApplication = (ssr = false, initialState?: Record<string, any
 
     app.use(pinia);
     app.use(router);
-    app.use(Tres as any);
+
+    // TresJS is heavy (Three.js based) - load lazily after first paint to not block mobile
+    // Only load when needed (Evolution page uses it)
+    if (typeof window !== 'undefined') {
+        const loadTres = () => {
+            import('@tresjs/core').then((Tres) => {
+                app.use(Tres.default as any);
+            }).catch((e) => {
+                console.warn('[TresJS] Lazy load failed:', e);
+            });
+        };
+
+        if ('requestIdleCallback' in window) {
+            (window as any).requestIdleCallback(loadTres, { timeout: 3000 });
+        } else {
+            setTimeout(loadTres, 2000);
+        }
+    }
 
     // Global Error Handler
     app.config.errorHandler = (err, _instance, info) => {

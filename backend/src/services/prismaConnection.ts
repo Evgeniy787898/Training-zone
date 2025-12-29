@@ -2,6 +2,44 @@ import { Prisma, PrismaClient } from '@prisma/client';
 
 const warmupQuery = Prisma.sql`SELECT 1`;
 
+/**
+ * Auto-transform Supabase Session Pooler URL to Transaction Pooler
+ * Session pooler (port 5432 on pooler.supabase.com) holds connections and causes MaxClientsInSessionMode
+ * Transaction pooler (port 6543) releases connections immediately - much better for development
+ */
+const transformToTransactionPooler = (url: string | null | undefined): string | null => {
+  if (!url) return null;
+
+  try {
+    const parsed = new URL(url);
+
+    // Check if this is a Supabase pooler URL using Session mode (port 5432)
+    const isSupabasePooler = parsed.hostname.includes('pooler.supabase.com');
+    const isSessionPooler = parsed.port === '5432' || parsed.port === '';
+
+    if (isSupabasePooler && isSessionPooler) {
+      // Transform to Transaction Pooler (port 6543)
+      parsed.port = '6543';
+
+      // Add required pgbouncer params if not present
+      if (!parsed.searchParams.has('pgbouncer')) {
+        parsed.searchParams.set('pgbouncer', 'true');
+      }
+      if (!parsed.searchParams.has('connection_limit')) {
+        parsed.searchParams.set('connection_limit', '6');
+      }
+
+      const newUrl = parsed.toString();
+      console.log('[Prisma] Auto-transformed Session Pooler (5432) to Transaction Pooler (6543)');
+      return newUrl;
+    }
+
+    return url;
+  } catch {
+    return url;
+  }
+};
+
 const runWarmupQuery = async (client: PrismaClient, timeoutMs: number) => {
   if (timeoutMs <= 0) {
     await client.$queryRaw(warmupQuery);
@@ -110,14 +148,17 @@ export const createPrismaClientWithPooling = async (
   let mode: 'pool' | 'direct';
   let runtimeUrl: string;
 
-  if (preferPool && poolUrl) {
-    runtimeUrl = poolUrl;
+  // Auto-transform Session Pooler to Transaction Pooler for Supabase
+  const transformedPoolUrl = transformToTransactionPooler(poolUrl);
+
+  if (preferPool && transformedPoolUrl) {
+    runtimeUrl = transformedPoolUrl;
     mode = 'pool';
   } else if (directUrl) {
     runtimeUrl = directUrl;
     mode = 'direct';
   } else {
-    runtimeUrl = poolUrl!;
+    runtimeUrl = transformedPoolUrl || poolUrl!;
     mode = 'pool';
   }
 
@@ -133,22 +174,40 @@ export const createPrismaClientWithPooling = async (
   let usedFallback = false;
 
   const warmup = async () => {
-    try {
-      await runWarmupQuery(client, warmupTimeoutMs);
-    } catch (error) {
-      if (mode === 'pool' && fallbackOnFailure && directUrl) {
-        usedFallback = true;
-        await client.$disconnect().catch(() => undefined);
-        client = new PrismaClient({
-          log: logDefinitions,
-          datasources: {
-            db: { url: directUrl },
-          },
-        });
-        runtimeUrl = directUrl;
-        mode = 'direct';
+    const maxRetries = 3;
+    const baseDelay = 2000;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
         await runWarmupQuery(client, warmupTimeoutMs);
-      } else {
+        return; // Success
+      } catch (error) {
+        const isPoolExhausted = error instanceof Error &&
+          error.message.includes('MaxClientsInSessionMode');
+
+        if (attempt < maxRetries && isPoolExhausted) {
+          const delay = baseDelay * Math.pow(2, attempt - 1);
+          console.log(`[Prisma] Pool exhausted, retrying in ${delay}ms... (attempt ${attempt}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Try fallback to direct connection
+        if (mode === 'pool' && fallbackOnFailure && directUrl) {
+          usedFallback = true;
+          await client.$disconnect().catch(() => undefined);
+          client = new PrismaClient({
+            log: logDefinitions,
+            datasources: {
+              db: { url: directUrl },
+            },
+          });
+          runtimeUrl = directUrl;
+          mode = 'direct';
+          await runWarmupQuery(client, warmupTimeoutMs);
+          return;
+        }
+
         throw error;
       }
     }
@@ -165,8 +224,8 @@ export const createPrismaClientWithPooling = async (
     requestedConcurrency && requestedConcurrency > 0
       ? Math.floor(requestedConcurrency)
       : connectionLimit
-      ? Math.max(1, connectionLimit - normalizedHeadroom)
-      : 4;
+        ? Math.max(1, connectionLimit - normalizedHeadroom)
+        : 4;
 
   const normalizedQueueWarn = queueWarnSize && queueWarnSize > 0 ? Math.floor(queueWarnSize) : 25;
 

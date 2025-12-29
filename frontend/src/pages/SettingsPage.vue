@@ -31,7 +31,7 @@
           :class="{ 'tab-item--active': activeTab === tab.id }"
           @click="activeTab = tab.id"
         >
-          <AppIcon :name="tab.icon" variant="accent" tone="ghost" :size="18" />
+          <AppIcon :name="tab.icon as any" variant="accent" tone="ghost" :size="18" />
           <span>{{ tab.label }}</span>
         </button>
       </div>
@@ -111,7 +111,7 @@
 
           <div class="card">
             <div class="card-header">
-              <AppIcon name="log-out" variant="accent" tone="ghost" :size="26" />
+              <AppIcon name="logOut" variant="accent" tone="ghost" :size="26" />
               <div class="card-header__text">
                 <h2>Аккаунт</h2>
                 <span>Управление сессией</span>
@@ -133,7 +133,7 @@
         <div v-else-if="activeTab === 'data'" key="data" class="panel">
           <div class="card">
             <div class="card-header">
-              <AppIcon name="hard-drive" variant="accent" tone="ghost" :size="26" />
+              <AppIcon name="hardDrive" variant="accent" tone="ghost" :size="26" />
               <div class="card-header__text">
                 <h2>Локальный кэш</h2>
                 <span>Данные на устройстве</span>
@@ -151,7 +151,7 @@
                 </div>
               </div>
               <button class="wide-btn wide-btn--warning" @click="clearLocalCache">
-                <AppIcon name="trash-2" variant="warning" tone="ghost" :size="16" />
+                <AppIcon name="trash" variant="warning" tone="ghost" :size="16" />
                 Очистить кэш
               </button>
             </div>
@@ -168,11 +168,16 @@
             <div class="card-body">
               <p class="info-text">Сброс серверного кэша поможет, если данные рассинхронизировались между устройствами.</p>
               <button class="wide-btn wide-btn--warning" :disabled="serverLoading" @click="clearServerCache">
-                <AppIcon :name="serverLoading ? 'loader' : 'refresh-cw'" variant="warning" tone="ghost" :size="16" :class="{ spinning: serverLoading }" />
+                <AppIcon :name="serverLoading ? 'loader' : 'refresh'" variant="warning" tone="ghost" :size="16" :class="{ spinning: serverLoading }" />
                 {{ serverLoading ? 'Очистка...' : 'Сбросить серверный кэш' }}
               </button>
             </div>
           </div>
+        </div>
+        
+        <!-- AI Settings (PERS-INS-002) -->
+        <div v-else-if="activeTab === 'ai'" key="ai" class="panel panel--ai">
+          <AiInstructionsEditor />
         </div>
       </Transition>
     </main>
@@ -181,7 +186,7 @@
     <footer class="settings-footer">
       <span>Training Zone <em>v2.0.0</em></span>
       <a href="https://t.me/av1242" target="_blank">
-        <AppIcon name="message-circle" variant="muted" tone="ghost" :size="14" />
+        <AppIcon name="messageCircle" variant="muted" tone="ghost" :size="14" />
         Поддержка
       </a>
     </footer>
@@ -220,6 +225,7 @@ import { clearAllCaches, invalidateProgramContextCaches } from '@/services/cache
 import { cachedApiClient } from '@/services/cachedApi';
 import AppIcon from '@/modules/shared/components/AppIcon.vue';
 import BodyParamsWidget from '@/modules/settings/widgets/BodyParamsWidget.vue';
+import { AiInstructionsEditor } from '@/components/ai';
 
 const appStore = useAppStore();
 
@@ -240,13 +246,14 @@ onMounted(() => {
   nextTick(() => handleTabsScroll());
 });
 
-type TabId = 'profile' | 'notifications' | 'security' | 'data';
+type TabId = 'profile' | 'notifications' | 'security' | 'data' | 'ai';
 const activeTab = ref<TabId>('profile');
 const tabs = [
   { id: 'profile' as TabId, label: 'Профиль', icon: 'user' },
   { id: 'notifications' as TabId, label: 'Уведомления', icon: 'bell' },
   { id: 'security' as TabId, label: 'Безопасность', icon: 'shield' },
-  { id: 'data' as TabId, label: 'Данные', icon: 'hard-drive' },
+  { id: 'data' as TabId, label: 'Данные', icon: 'hardDrive' },
+  { id: 'ai' as TabId, label: 'AI', icon: 'cpu' },
 ];
 
 // Body Params (FEAT-003)
@@ -269,7 +276,7 @@ const handleBodyParamsUpdate = async (params: { weightKg: number | null; heightC
       },
     } as any);
     // Refresh profile summary
-    await appStore.loadProfileSummary(true);
+    await appStore.refreshProfile();
     appStore.showToast({ title: 'Параметры сохранены', type: 'success' });
   } catch (e: any) {
     appStore.showToast({ title: 'Ошибка', message: e.message, type: 'error' });

@@ -12,6 +12,8 @@ export type SecurityEvent =
     | 'LOGIN_FAILURE'
     | 'LOGOUT'
     | 'PIN_CHANGE'
+    | 'PIN_CHANGE_SUCCESS'
+    | 'PIN_CHANGE_FAILURE'
     | 'PIN_VERIFY_FAILURE'
     | 'PROFILE_UPDATE'
     | 'REFRESH_TOKEN_ROTATION'
@@ -38,7 +40,7 @@ export class AuditService {
                     status,
                     ip: context?.ip,
                     userAgent: context?.userAgent,
-                    metadata: context?.metadata ?? {},
+                    metadata: (context?.metadata ?? {}) as any,
                 },
             });
         } catch (error) {

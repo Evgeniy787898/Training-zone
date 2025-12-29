@@ -6,7 +6,7 @@
     <div v-else :class="['app-container', { 'app-container--grid': isGridLayoutActive }]">
       <transition name="header-slide">
         <AppHeader
-          v-show="!appStore.isFocusMode"
+          v-show="!appStore.isFocusMode || appStore.isTrainingMinimized"
           ref="appHeaderRef"
           :hero-status="heroStatus"
           :hero-expanded="heroExpanded"
@@ -48,7 +48,11 @@
             <Suspense>
               <template #default>
                 <transition name="fade-slide" mode="out-in">
-                  <component :is="Component" />
+                  <!-- keep-alive preserves component state when switching tabs -->
+                  <!-- Include EvolutionPage to prevent re-loading 160+ frames -->
+                  <keep-alive :include="['EvolutionPage']" :max="3">
+                    <component :is="Component" />
+                  </keep-alive>
                 </transition>
               </template>
               <template #fallback>
@@ -72,10 +76,12 @@
 
       <transition name="footer-slide">
         <AppFooter
-          v-show="!appStore.isFocusMode"
+          v-show="!appStore.isFocusMode || appStore.isTrainingMinimized"
           ref="appFooterRef"
           :active-tab="activeTab"
+          :ai-active="aiWidgetOpen"
           @tab-change="handleTabChange"
+          @ai-click="handleAiClick"
         />
       </transition>
     </div>
@@ -86,8 +92,26 @@
 
     <OfflineIndicator :is-online="isOnline" />
 
+    <!-- Global Minimized Training Pill - shows on ALL pages when training is minimized -->
+    <Transition name="tab-slide">
+      <div 
+        v-if="appStore.isTrainingMinimized"
+        class="global-minimized-pill"
+        @click="goToTraining"
+      >
+        <div class="global-minimized-pill__content">
+          <span class="global-minimized-pill__time">{{ formattedTrainingTime }}</span>
+          <svg class="global-minimized-pill__icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        </div>
+      </div>
+    </Transition>
+
     <!-- GAP-010: Global AI Widget -->
-    <FloatingAiWidget v-if="pinVerified" />
+    <FloatingAiWidget 
+      v-if="pinVerified" 
+      :is-open="aiWidgetOpen"
+      @update:is-open="aiWidgetOpen = $event"
+    />
   </div>
 </template>
 
@@ -116,7 +140,9 @@ const AppFooter = createLazyComponent(() => import('@/components/layout/AppFoote
 const HeroPanel = createLazyComponent(() => import('@/components/layout/HeroPanel.vue'));
 const Toast = createLazyComponent(() => import('@/modules/shared/components/Toast.vue'));
 const FloatingAiWidget = createLazyComponent(() => import('@/components/FloatingAiWidget.vue'));
-const RouteSkeleton = createLazyComponent(() => import('@/modules/shared/components/RouteSkeleton.vue'));
+
+// CRITICAL: RouteSkeleton MUST be sync - it's used as Suspense fallback
+import RouteSkeleton from '@/modules/shared/components/RouteSkeleton.vue';
 
 const OfflineIndicator = createLazyComponent(() => import('@/modules/shared/components/OfflineIndicator.vue'));
 
@@ -132,6 +158,7 @@ const {
 
 const appRootRef = ref<HTMLElement | null>(null);
 const pinVerified = ref(false);
+const aiWidgetOpen = ref(false);
 
 const { isGridLayoutActive, heroExpanded } = useAppLayout();
 
@@ -158,7 +185,6 @@ watch(isOnline, (online, oldVal) => {
 
 const routeResetNonce = ref(0);
 const routeBoundaryKey = computed(() => `${router.currentRoute.value.fullPath}|${routeResetNonce.value}`);
-const routeErrorBoundary = ref<{ reset: () => void } | null>(null);
 
 
 
@@ -186,7 +212,20 @@ const navigateToSlug = (slug: AppRouteSlug) => {
   void router.push(path);
 };
 
+// Global minimized training pill helpers
+const formattedTrainingTime = computed(() => {
+  const total = appStore.trainingElapsedTime;
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+});
 
+const goToTraining = async () => {
+  // Navigate to today page and restore training
+  await router.push('/today');
+  // Restore from minimized state (FocusSessionView will handle isMinimized=false)
+  appStore.setTrainingMinimized(false);
+};
 // Current date for header button
 const currentDate = new Date();
 const currentDay = computed(() => currentDate.getDate().toString());
@@ -229,15 +268,20 @@ const {
 
 // GRID LAYOUT LOGIC MOVED TO useAppLayout
 
-const handlePinSuccess = () => {
+const handlePinSuccess = async () => {
+  // CRITICAL: Load program data BEFORE showing main UI to prevent empty state flash
+  try {
+    await appStore.ensureProgramContext({ force: true, includeLevels: true });
+  } catch (err) {
+    console.error('Failed to load program context on PIN success:', err);
+    // Continue anyway - UI will show empty state which is correct in this case
+  }
+
+  // Now show the main UI with program data already loaded
   pinVerified.value = true;
 
   void appStore.refreshAssistantSessionState({ force: true });
   appStore.ensureAssistantSessionMonitor();
-
-  // Загружаем данные программы из БД после успешной верификации PIN
-  // Используем кэш для быстрой загрузки
-  loadUserProgramData(true);
 
   startCriticalPrefetch();
 };
@@ -363,19 +407,6 @@ useKeyboardShortcuts([
   },
 ]);
 
-// Загрузка данных программы из БД (используем общее состояние стора)
-const loadUserProgramData = async (force = false) => {
-  if (!pinVerified.value) {
-    return;
-  }
-
-  try {
-    await appStore.ensureProgramContext({ force, includeLevels: true });
-  } catch (err) {
-    console.error('Failed to load user program context:', err);
-  }
-};
-
 const handleProgramSelection = async (programData: any) => {
   if (!pinVerified.value) {
     return;
@@ -451,10 +482,11 @@ const handleTabChange = (tabId: string) => {
     case 'evolution':
       router.push('/evolution');
       break;
-    case 'history':
-      router.push('/history');
-      break;
   }
+};
+
+const handleAiClick = () => {
+  aiWidgetOpen.value = !aiWidgetOpen.value;
 };
 </script>
 
@@ -482,4 +514,48 @@ const handleTabChange = (tabId: string) => {
 }
 
 /* All layout styles moved to assets/css/app-layout.css */
+
+/* Global Minimized Training Pill - minimal tab on left edge */
+.global-minimized-pill {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 9999;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.global-minimized-pill__content {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  background: var(--color-accent, #10A37F);
+  border-radius: 0 10px 10px 0;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+  transition: all 0.25s ease;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.global-minimized-pill:hover .global-minimized-pill__content {
+  padding-right: 10px;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4);
+}
+
+.global-minimized-pill__time {
+  font-family: 'SF Mono', 'Roboto Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.global-minimized-pill__icon {
+  width: 14px;
+  height: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  transform: rotate(90deg);
+}
 </style>

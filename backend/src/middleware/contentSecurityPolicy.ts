@@ -18,21 +18,32 @@ const TELEGRAM_DOMAINS = [
   'https://tg.dev',
 ];
 
+const SUPABASE_DOMAINS = [
+  'https://*.supabase.co',
+];
+
+const NGROK_DOMAINS = [
+  'https://*.ngrok-free.dev',
+  'https://*.ngrok.io',
+  'wss://*.ngrok-free.dev',
+  'wss://*.ngrok.io',
+];
+
 const DEFAULT_DIRECTIVES: DirectiveMap = {
-  'default-src': ["'self'"],
+  'default-src': ["'self'", ...NGROK_DOMAINS],
   'base-uri': ["'self'"],
   'object-src': ["'none'"],
-  'frame-ancestors': ["'self'", ...TELEGRAM_DOMAINS],
-  'frame-src': ["'self'", ...TELEGRAM_DOMAINS],
-  'connect-src': ["'self'", ...TELEGRAM_DOMAINS],
-  'script-src': ["'self'", "'unsafe-inline'", ...TELEGRAM_DOMAINS],
-  'style-src': ["'self'", "'unsafe-inline'", ...TELEGRAM_DOMAINS],
-  'img-src': ["'self'", 'data:', 'blob:', ...TELEGRAM_DOMAINS],
-  'font-src': ["'self'", 'https:', 'data:'],
-  'manifest-src': ["'self'"],
-  'worker-src': ["'self'", 'blob:'],
-  'media-src': ["'self'", 'blob:', ...TELEGRAM_DOMAINS],
-  'form-action': ["'self'"],
+  'frame-ancestors': ["'self'", ...TELEGRAM_DOMAINS, ...NGROK_DOMAINS],
+  'frame-src': ["'self'", ...TELEGRAM_DOMAINS, ...NGROK_DOMAINS],
+  'connect-src': ["'self'", ...TELEGRAM_DOMAINS, ...SUPABASE_DOMAINS, ...NGROK_DOMAINS],
+  'script-src': ["'self'", "'unsafe-inline'", ...TELEGRAM_DOMAINS, ...NGROK_DOMAINS],
+  'style-src': ["'self'", "'unsafe-inline'", ...TELEGRAM_DOMAINS, ...NGROK_DOMAINS],
+  'img-src': ["'self'", 'data:', 'blob:', ...TELEGRAM_DOMAINS, ...SUPABASE_DOMAINS, ...NGROK_DOMAINS],
+  'font-src': ["'self'", 'https:', 'data:', ...NGROK_DOMAINS],
+  'manifest-src': ["'self'", ...NGROK_DOMAINS],
+  'worker-src': ["'self'", 'blob:', ...NGROK_DOMAINS],
+  'media-src': ["'self'", 'blob:', ...TELEGRAM_DOMAINS, ...NGROK_DOMAINS],
+  'form-action': ["'self'", ...NGROK_DOMAINS],
   'upgrade-insecure-requests': [],
 };
 

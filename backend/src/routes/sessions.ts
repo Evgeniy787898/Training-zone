@@ -153,6 +153,13 @@ export function createSessionsRouter(sessionService: SessionService) {
                 format(weekStart, 'yyyy-MM-dd')
             );
 
+            // Update AI summary asynchronously
+            import('../modules/ai/profileSummaryService.js').then(({ updateProfileSummary }) => {
+                updateProfileSummary(req.prisma!, req.profileId!).catch(err =>
+                    console.error('[Sessions] Failed to update AI summary:', err)
+                );
+            });
+
             return respondWithSuccess(res, {
                 message: 'Неделя сброшена к исходному плану',
                 deleted: deleted,
@@ -237,6 +244,13 @@ export function createSessionsRouter(sessionService: SessionService) {
 
             const session = await service.saveSession(req.profileId, requestPayload);
 
+            // Update AI summary asynchronously
+            import('../modules/ai/profileSummaryService.js').then(({ updateProfileSummary }) => {
+                updateProfileSummary(req.prisma!, req.profileId!).catch(err =>
+                    console.error('[Sessions] Failed to update AI summary:', err)
+                );
+            });
+
             const responsePayload: SessionSingleResponse = { session: session as SessionSingleResponse['session'] };
             return respondWithSuccess<SessionSingleResponse>(res, responsePayload, { meta: buildRequestMeta(req) });
         } catch (error) {
@@ -274,6 +288,14 @@ export function createSessionsRouter(sessionService: SessionService) {
             );
 
             const responsePayload: SessionSingleResponse = { session: session as SessionSingleResponse['session'] };
+
+            // Update AI summary asynchronously
+            import('../modules/ai/profileSummaryService.js').then(({ updateProfileSummary }) => {
+                updateProfileSummary(req.prisma!, req.profileId!).catch(err =>
+                    console.error('[Sessions] Failed to update AI summary:', err)
+                );
+            });
+
             return respondWithSuccess<SessionSingleResponse>(res, responsePayload, { meta: buildRequestMeta(req) });
         } catch (error) {
             if (isAccessDeniedError(error)) {
@@ -307,6 +329,14 @@ export function createSessionsRouter(sessionService: SessionService) {
             });
 
             const payload: SessionDeleteResponse = { message: 'Тренировка удалена' };
+
+            // Update AI summary asynchronously
+            import('../modules/ai/profileSummaryService.js').then(({ updateProfileSummary }) => {
+                updateProfileSummary(req.prisma!, req.profileId!).catch(err =>
+                    console.error('[Sessions] Failed to update AI summary:', err)
+                );
+            });
+
             return respondWithSuccess<SessionDeleteResponse>(res, payload, { meta: buildRequestMeta(req) });
         } catch (error) {
             if (isAccessDeniedError(error)) {

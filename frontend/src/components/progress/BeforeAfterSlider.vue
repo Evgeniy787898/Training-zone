@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 

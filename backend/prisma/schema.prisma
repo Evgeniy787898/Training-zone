@@ -22,6 +22,9 @@ model Profile {
   notificationTime    DateTime? @map("notification_time") @db.Time
   timezone            String    @default("Europe/Moscow") @db.VarChar(64)
   notificationsPaused Boolean   @default(false) @map("notifications_paused")
+  aiSummary           Json?     @map("ai_summary")           // Compressed full AI context
+  aiSummaryUpdatedAt  DateTime? @map("ai_summary_updated_at") @db.Timestamptz
+  customInstructions  Json?     @map("custom_instructions")   // Personal AI behavior instructions (PERS-INS-001)
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
@@ -44,6 +47,8 @@ model Profile {
   sensitiveAuditLogs       SensitiveAuditLog[]
   favoriteExercises        FavoriteExercise[]
   evolution360Scans        Evolution360Scan[]
+  messageFeedback          MessageFeedback[]
+  notifications            Notification[]
 
   @@map("profiles")
 }
@@ -559,4 +564,172 @@ model Evolution360Frame {
   @@unique([scanId, frameIndex], map: "evolution_360_frames_scan_frame_key")
   @@index([scanId], map: "evolution_360_frames_scan_id_idx")
   @@map("evolution_360_frames")
+}
+
+// === AI FEEDBACK FOR MACHINE LEARNING ===
+model MessageFeedback {
+  id            String   @id @default(uuid()) @db.Uuid
+  profileId     String   @map("profile_id") @db.Uuid
+  messageId     String   @unique @map("message_id") // UUID of the chat message
+  
+  // User reaction
+  reaction      String   @db.VarChar(10) // 'like', 'dislike', or emoji like '🔥'
+  comment       String?  // User comment when disliking
+  
+  // Context for ML training
+  userMessage   String   @map("user_message") // Original user question
+  aiResponse    String   @map("ai_response")  // AI response that was rated
+  aiMood        String?  @map("ai_mood") @db.VarChar(20) // AI mood when responding
+  
+  createdAt     DateTime @default(now()) @map("created_at")
+  
+  profile       Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  
+  @@index([profileId], map: "message_feedback_profile_id_idx")
+  @@index([reaction], map: "message_feedback_reaction_idx")
+  @@map("message_feedback")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  profileId String   @map("profile_id") @db.Uuid
+  type      String   @db.VarChar(32) // 'training_reminder', 'motivation', 'achievement', 'weekly_report', 'daily_tip'
+  title     String
+  message   String
+  data      Json?    @default("{}")
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId], map: "notifications_profile_id_idx")
+  @@map("notifications")
+}
+
+// === AI SELF-LEARNING SYSTEM (SELF-001, ML-001, LEARN-001) ===
+
+// Stores all AI interactions for learning
+model AIInteraction {
+  id              String   @id @default(uuid()) @db.Uuid
+  profileId       String   @map("profile_id") @db.Uuid
+  userMessage     String   @map("user_message") @db.Text
+  aiResponse      String   @map("ai_response") @db.Text
+  intent          String?  @db.VarChar(64)
+  rating          String?  @db.VarChar(16) // 'positive', 'negative', 'neutral'
+  reactionEmoji   String?  @map("reaction_emoji") @db.VarChar(10)
+  feedbackComment String?  @map("feedback_comment") @db.Text
+  latencyMs       Int?     @map("latency_ms")
+  tokensUsed      Int?     @map("tokens_used")
+  model           String?  @db.VarChar(64)
+  promptVersion   String?  @map("prompt_version") @db.VarChar(32)
+  metadata        Json?    @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([profileId], map: "ai_interactions_profile_id_idx")
+  @@index([rating], map: "ai_interactions_rating_idx")
+  @@index([intent], map: "ai_interactions_intent_idx")
+  @@index([createdAt], map: "ai_interactions_created_at_idx")
+  @@map("ai_interactions")
+}
+
+// Auto-generated and user-provided instructions that improve AI behavior
+model AILearnedInstruction {
+  id                  String   @id @default(uuid()) @db.Uuid
+  profileId           String?  @map("profile_id") @db.Uuid // null = global instruction
+  content             String   @db.Text
+  category            String   @db.VarChar(32) // 'response_style', 'topic_handling', 'error_recovery', 'personalization', 'safety'
+  confidence          Float    @default(0.5) // 0.0 - 1.0
+  successRate         Float    @default(0.5) @map("success_rate") // ratio of positive feedback when used
+  usageCount          Int      @default(0) @map("usage_count")
+  source              String   @db.VarChar(32) // 'auto_generated', 'user_feedback', 'admin', 'baseline'
+  isActive            Boolean  @default(true) @map("is_active")
+  parentInstructionId String?  @map("parent_instruction_id") @db.Uuid
+  metadata            Json?    @default("{}")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([profileId], map: "ai_learned_instructions_profile_id_idx")
+  @@index([isActive, confidence], map: "ai_learned_instructions_active_confidence_idx")
+  @@index([category], map: "ai_learned_instructions_category_idx")
+  @@map("ai_learned_instructions")
+}
+
+// Experience replay buffer for few-shot learning
+model AIExperienceBuffer {
+  id           String   @id @default(uuid()) @db.Uuid
+  profileId    String   @unique @map("profile_id") @db.Uuid
+  interactions Json     @default("[]") // Array of BufferedInteraction
+  maxSize      Int      @default(1000) @map("max_size")
+  createdAt    DateTime @default(now()) @map("created_at")
+  lastCleanup  DateTime @default(now()) @map("last_cleanup")
+
+  @@map("ai_experience_buffers")
+}
+
+// User learning profile for personalization
+model AIUserLearningProfile {
+  id                 String   @id @default(uuid()) @db.Uuid
+  profileId          String   @unique @map("profile_id") @db.Uuid
+  communicationStyle Json     @default("{}") @map("communication_style")
+  topics             Json     @default("{}")
+  patterns           Json     @default("{}")
+  emotionalPatterns  Json     @default("{}") @map("emotional_patterns")
+  lastUpdated        DateTime @default(now()) @map("last_updated")
+
+  @@map("ai_user_learning_profiles")
+}
+
+// Failure patterns for generating corrective instructions
+model AIFailurePattern {
+  id          String   @id @default(uuid()) @db.Uuid
+  profileId   String   @map("profile_id") @db.Uuid
+  category    String   @db.VarChar(32) // 'factual_error', 'length_issue', 'tone_issue', etc.
+  confidence  Float    @default(0.5)
+  userMessage String   @map("user_message") @db.VarChar(500)
+  aiResponse  String   @map("ai_response") @db.VarChar(500)
+  comment     String?  @db.VarChar(500)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([profileId, category], map: "ai_failure_patterns_profile_category_idx")
+  @@index([createdAt], map: "ai_failure_patterns_created_at_idx")
+  @@map("ai_failure_patterns")
+}
+
+// Music tracks for training sessions
+model MusicTrack {
+  id          String   @id @default(uuid()) @db.Uuid
+  profileId   String   @map("profile_id") @db.Uuid
+  name        String   @db.VarChar(255)
+  fileName    String   @map("file_name") @db.VarChar(255)
+  storagePath String   @map("storage_path") @db.VarChar(512)
+  storageUrl  String   @map("storage_url") @db.VarChar(1024)
+  duration    Int?     // Duration in seconds
+  fileSize    Int?     @map("file_size") // In bytes
+  mimeType    String?  @map("mime_type") @db.VarChar(64)
+  uploadedAt  DateTime @default(now()) @map("uploaded_at")
+  
+  @@index([profileId], map: "music_tracks_profile_id_idx")
+  @@index([profileId, uploadedAt], map: "music_tracks_profile_uploaded_idx")
+  @@map("music_tracks")
+}
+
+// Detailed per-set results for exercises
+model ExerciseSetResult {
+  id                  String   @id @default(uuid()) @db.Uuid
+  profileId           String   @map("profile_id") @db.Uuid
+  sessionId           String   @map("session_id") @db.Uuid
+  exerciseKey         String   @map("exercise_key") @db.VarChar(64)
+  setIndex            Int      @map("set_index")
+  targetReps          Int      @map("target_reps")
+  actualReps          Int      @map("actual_reps")
+  rpe                 Int?     // 1-10 scale
+  durationSeconds     Int?     @map("duration_seconds")
+  restAfterSeconds    Int?     @map("rest_after_seconds")
+  createdAt           DateTime @default(now()) @map("created_at")
+  
+  @@unique([sessionId, exerciseKey, setIndex], map: "exercise_set_results_session_exercise_set_uidx")
+  @@index([profileId, sessionId], map: "exercise_set_results_profile_session_idx")
+  @@index([sessionId, exerciseKey], map: "exercise_set_results_session_exercise_idx")
+  @@map("exercise_set_results")
 }

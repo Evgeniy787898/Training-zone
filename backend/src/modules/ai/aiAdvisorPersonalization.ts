@@ -1,5 +1,6 @@
 import type { SafePrismaClient } from '../../types/prisma.js';
 import type { AiAdvisorPersonalization } from '../../types/aiAdvisor.js';
+import { AISummaryService } from '../../services/aiSummary.service.js';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -168,6 +169,32 @@ export async function loadAiAdvisorPersonalization(
             ? Math.round((readinessSamples.reduce((acc, value) => acc + value, 0) / readinessSamples.length) * 10) / 10
             : undefined;
 
+    // Load AI Summary (Phase 3)
+    let aiSummaryData: AiAdvisorPersonalization['aiSummary'];
+    try {
+        const summaryService = new AISummaryService(prisma as any);
+        const summary = await summaryService.getSummary(profileId);
+        if (summary) {
+            aiSummaryData = {
+                totalWorkouts: summary.stats.totalWorkouts,
+                currentStreak: summary.stats.currentStreak,
+                bestStreak: summary.stats.bestStreak,
+                weeklyAverage: summary.stats.weeklyAverage,
+                monthlyWorkouts: summary.stats.monthlyWorkouts,
+                trainingDays: summary.profile.trainingDays,
+                level: summary.profile.level,
+                notes: summary.notes,
+                patterns: {
+                    bestDay: summary.patterns.bestDay,
+                    avgSessionMinutes: summary.patterns.avgSessionMinutes,
+                    preferredTime: summary.patterns.preferredTime,
+                },
+            };
+        }
+    } catch (err) {
+        console.warn('[AiAdvisorPersonalization] Failed to load AI summary:', err);
+    }
+
     const payload: AiAdvisorPersonalization = {
         profile: {
             firstName: sanitizeString(profile.firstName, 64),
@@ -195,7 +222,9 @@ export async function loadAiAdvisorPersonalization(
             totalCount: totalAchievements,
         },
         readiness: avgRpe ? { avgRpe7d: avgRpe } : undefined,
+        aiSummary: aiSummaryData,
     };
 
     return payload;
 }
+

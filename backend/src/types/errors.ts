@@ -49,6 +49,8 @@ export const ERROR_CODES = {
     TOKEN_REVOKED: 'token_revoked',
     TOKEN_EXPIRED: 'token_expired',
     FAVORITES_ERROR: 'favorites_error',
+    UNAUTHORIZED: 'unauthorized',
+    INVALID_PAGINATION: 'invalid_pagination',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

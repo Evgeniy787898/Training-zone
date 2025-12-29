@@ -558,6 +558,20 @@ export const rateLimitConfig = Object.freeze({
     windowMs: 60_000,
     defaultMax: 10,
   }),
+  assistant: Object.freeze({
+    chat: Object.freeze({
+      windowMs: 60_000,
+      defaultMax: 20, // 20 chat requests per minute per user
+    }),
+    tts: Object.freeze({
+      windowMs: 60_000,
+      defaultMax: 10, // 10 TTS requests per minute per user
+    }),
+    transcribe: Object.freeze({
+      windowMs: 60_000,
+      defaultMax: 15, // 15 voice transcriptions per minute per user
+    }),
+  }),
   bruteForce: Object.freeze({
     maxAttempts: 5,
     blockDurationMs: 15 * 60 * 1000,
@@ -759,8 +773,8 @@ export const microserviceClients = Object.freeze({
 }) satisfies MicroservicesConfig;
 
 export const requestTimeoutDefaults = Object.freeze({
-  softTimeoutMs: 12_000,
-  hardTimeoutMs: 15_000,
+  softTimeoutMs: 240_000,   // 4 minutes soft warning
+  hardTimeoutMs: 300_000,   // 5 minutes hard limit (for large ZIP uploads)
   headerName: 'x-request-timeout-ms',
 }) satisfies RequestTimeoutDefaults;
 

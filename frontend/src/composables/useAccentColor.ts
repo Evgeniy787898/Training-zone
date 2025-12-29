@@ -2,7 +2,7 @@
  * Composable for managing accent color presets.
  * DS-001: Расширение цветовой палитры акцентов
  */
-import { ref, watch, onMounted } from 'vue';
+import { ref } from 'vue';
 
 export type AccentColorKey = 'emerald' | 'violet' | 'amber' | 'rose' | 'cyan';
 
@@ -174,37 +174,12 @@ function applyThemePresetToDOM(themeKey: ThemePresetKey): void {
     root.style.setProperty('--color-border', c.border);
 }
 
-function loadFromStorage(): AccentColorKey {
-    try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored && stored in ACCENT_PRESETS) {
-            return stored as AccentColorKey;
-        }
-    } catch {
-        // localStorage might be unavailable
-    }
-    return DEFAULT_ACCENT;
-}
-
 function saveToStorage(accent: AccentColorKey): void {
     try {
         localStorage.setItem(STORAGE_KEY, accent);
     } catch {
         // Ignore storage errors
     }
-}
-
-// THEME-F02: Theme preset storage
-function loadThemeFromStorage(): ThemePresetKey {
-    try {
-        const stored = localStorage.getItem(THEME_STORAGE_KEY);
-        if (stored && stored in THEME_PRESETS) {
-            return stored as ThemePresetKey;
-        }
-    } catch {
-        // localStorage might be unavailable
-    }
-    return DEFAULT_THEME;
 }
 
 function saveThemeToStorage(theme: ThemePresetKey): void {
@@ -214,8 +189,6 @@ function saveThemeToStorage(theme: ThemePresetKey): void {
         // Ignore storage errors
     }
 }
-
-let initialized = false;
 
 export function useAccentColor() {
     const setAccent = (accent: AccentColorKey) => {
@@ -233,36 +206,8 @@ export function useAccentColor() {
         saveThemeToStorage(theme);
     };
 
-    const initAccentColor = () => {
-        if (initialized) return;
-        initialized = true;
-
-        // Load accent color
-        const storedAccent = loadFromStorage();
-        currentAccent.value = storedAccent;
-        applyAccentToDOM(storedAccent);
-
-        // THEME-F02: Load theme preset
-        const storedTheme = loadThemeFromStorage();
-        currentThemePreset.value = storedTheme;
-        if (storedTheme !== 'default') {
-            applyThemePresetToDOM(storedTheme);
-        }
-    };
-
-    onMounted(() => {
-        initAccentColor();
-    });
-
-    // Watch for external changes (e.g., from different component)
-    watch(currentAccent, (newAccent) => {
-        applyAccentToDOM(newAccent);
-    });
-
-    // THEME-F02: Watch theme preset changes
-    watch(currentThemePreset, (newTheme) => {
-        applyThemePresetToDOM(newTheme);
-    });
+    // NOTE: Theme management is now handled by app.ts store
+    // This composable is kept for backwards compatibility with ProgressPhotoUpload.vue
 
     return {
         currentAccent,
@@ -277,14 +222,16 @@ export function useAccentColor() {
     };
 }
 
-// Initialize on import for SSR-safe hydration
-if (typeof window !== 'undefined') {
-    const stored = loadFromStorage();
-    currentAccent.value = stored;
-    // Apply immediately to prevent flash
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => applyAccentToDOM(stored));
-    } else {
-        applyAccentToDOM(stored);
-    }
-}
+// DISABLED: This auto-initialization conflicts with app.ts accent management
+// The app.ts store is now the single source of truth for accent colors.
+// Do not apply accent on module import - let app.ts handle it.
+// 
+// if (typeof window !== 'undefined') {
+//     const stored = loadFromStorage();
+//     currentAccent.value = stored;
+//     if (document.readyState === 'loading') {
+//         document.addEventListener('DOMContentLoaded', () => applyAccentToDOM(stored));
+//     } else {
+//         applyAccentToDOM(stored);
+//     }
+// }

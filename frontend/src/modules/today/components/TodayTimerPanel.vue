@@ -54,7 +54,16 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, defineAsyncComponent } from 'vue';
+import { defineComponent, defineAsyncComponent, type PropType } from 'vue';
+
+interface TabataSettings {
+  work: number;
+  rest: number;
+  restBetweenSets: number;
+  restBetweenExercises: number;
+  rounds: number;
+  [key: string]: unknown;
+}
 
 export default defineComponent({
   name: 'TodayTimerPanel',
@@ -65,7 +74,7 @@ export default defineComponent({
   props: {
     isLocked: { type: Boolean, required: true },
     primaryExerciseTitle: { type: String, required: true },
-    settings: { type: Object, required: true },
+    settings: { type: Object as PropType<TabataSettings>, required: true },
     focusMode: { type: Boolean, required: true },
     hasPrev: { type: Boolean, default: false },
     hasNext: { type: Boolean, default: false },

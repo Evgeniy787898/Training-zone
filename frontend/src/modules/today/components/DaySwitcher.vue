@@ -1,6 +1,6 @@
 <template>
   <div class="day-switcher-wrapper">
-    <div class="day-switcher surface-card surface-card--overlay" role="group" aria-label="Выбор дня тренировки">
+    <div class="day-switcher" role="group" aria-label="Выбор дня тренировки">
       <button
         type="button"
         class="day-switcher__control"
