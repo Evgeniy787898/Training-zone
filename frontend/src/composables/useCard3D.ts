@@ -119,11 +119,10 @@ export function useCard3D() {
         }
 
         return {
-            transform: `perspective(1000px) rotateX(${hover.rotateX}deg) rotateY(${hover.rotateY}deg) scale3d(1.02, 1.02, 1.02)`,
-            zIndex: 10,
-            boxShadow: '0 20px 40px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)',
+            transform: `perspective(1000px) rotateX(${hover.rotateX}deg) rotateY(${hover.rotateY}deg)`,
+            zIndex: 1,
             transition: 'none', // Отключаем плавную анимацию при движении (для мгновенного отклика)
-            willChange: 'transform, box-shadow'
+            willChange: 'transform'
         };
     };
 

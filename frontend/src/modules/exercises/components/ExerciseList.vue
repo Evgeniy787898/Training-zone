@@ -38,10 +38,7 @@
               :key="exercise.id"
               :exercise="exercise"
               :index="realIndex"
-              :styles="[
-                cardStyles[realIndex], 
-                getCard3DStyle(`exercise-${exercise.id}`) 
-              ]"
+              :styles="cardStyles[realIndex]"
               :is-expanded="expandedIconId === exercise.id"
               @click="onCardClick"
               @icon-click="onIconClick"
@@ -174,12 +171,8 @@ const onCardMouseLeave = (exercise: ProgramExercise) => {
   position: relative;
   width: 100%;
   min-height: 120px;
-  overflow: visible;
   opacity: 0;
-  transform: translateY(20px) scale(0.98);
-  transition: 
-    opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.5s ease;
 }
 
 .exercises-container--visible {
@@ -189,10 +182,10 @@ const onCardMouseLeave = (exercise: ProgramExercise) => {
 .exercises-list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
+  gap: 3vw;
   width: 100%;
   position: relative;
-  padding: 12px 8px var(--space-xl);
+  padding: 3vw 3vw var(--space-xl);
 }
 
 /* Scrollable Container */

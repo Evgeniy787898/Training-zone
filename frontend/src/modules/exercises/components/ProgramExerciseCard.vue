@@ -102,13 +102,23 @@ const onMouseLeave = () => {
 /* Card container - NO transforms to prevent overlap */
 .exercise-card {
   position: relative;
-  aspect-ratio: 1;
+  aspect-ratio: 1 / 1;
+  width: 100%;
   border-radius: 16px;
   overflow: hidden;
   cursor: pointer;
   background: #1a1a1f;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  box-sizing: border-box;
+}
+
+/* Fallback for browsers without aspect-ratio support */
+@supports not (aspect-ratio: 1 / 1) {
+  .exercise-card {
+    height: 0;
+    padding-bottom: 100%;
+  }
 }
 
 .exercise-card:hover {
